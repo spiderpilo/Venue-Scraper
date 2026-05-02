@@ -71,4 +71,23 @@ def run_pipeline():
             "Incentive Category": incentive["category"],
             "Incentive Teaser": incentive["teaser"],
             "Full Incentive Description": incentive["description"],
-            "Days / Timing Restrict
+            "Days / Timing Restrictions": enriched["Days / Timing Restrictions"],
+            "Group Friendly?": enriched["Group Friendly?"],
+            "Psychological Motivator Type": enriched["Psychological Motivator Type"],
+            "Estimated Perceived Value ($ range)": enriched["Estimated Perceived Value ($ range)"],
+            "Expiration / Ongoing": enriched["Expiration / Ongoing"],
+
+            "Source URL": place.get("website"),
+            "Notes": incentive["notes"]
+        })
+
+    print("Processed results:", results)
+
+    # 📊 Build ML dataset
+    sentence_df = build_sentence_dataset(places_with_text)
+    save_sentence_dataset(sentence_df)
+
+    # 💾 Save final venue data
+    save_to_json(results)
+
+    return results
