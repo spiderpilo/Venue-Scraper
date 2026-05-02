@@ -1,8 +1,8 @@
 from src.place_search import search_places
-from src.scraper import scrape_multiple_pages, scrape_website_text
+from src.scraper import scrape_venue_pages
 from src.incentive_extractor import extract_incentive
 from src.storage import save_to_json
-
+from src.field_enricher import enrich_fields
 
 def run_pipeline():
     print("Pipeline started...")
@@ -19,10 +19,9 @@ def run_pipeline():
     for i, place in enumerate(places, start=1):
         print(f"Checking website for: {place.get('name')}")
 
-        from src.scraper import scrape_multiple_pages
-
-        website_text = scrape_multiple_pages(place.get("website"))
+        website_text = scrape_venue_pages(place.get("website"))
         incentive = extract_incentive(website_text)
+        enriched = enrich_fields(place, website_text, incentive)
 
         results.append({
             "venue_id": place.get("place_id"),

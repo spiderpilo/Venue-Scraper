@@ -1,40 +1,54 @@
-def scrape_multiple_pages(base_url):
+import requests
+from bs4 import BeautifulSoup
+
+
+COMMON_INCENTIVE_PATHS = [
+    "",
+    "/happy-hour",
+    "/happyhour",
+    "/specials",
+    "/events",
+    "/promotions",
+    "/deals",
+    "/menu",
+]
+
+
+def scrape_page_text(url):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        response = requests.get(url, headers=headers, timeout=8)
+
+        if response.status_code != 200:
+            return ""
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        for tag in soup(["script", "style", "nav", "footer"]):
+            tag.decompose()
+
+        return soup.get_text(" ", strip=True)
+
+    except Exception:
+        return ""
+
+
+def scrape_venue_pages(base_url):
     if not base_url:
         return ""
 
-    paths = [
-        "",
-        "/happy-hour",
-        "/specials",
-        "/events",
-        "/promotions",
-        "/deals"
-    ]
+    all_text = ""
 
-    full_text = ""
+    for path in COMMON_INCENTIVE_PATHS:
+        url = base_url.rstrip("/") + path
+        print(f"Scraping: {url}")
 
-    for path in paths:
-        try:
-            url = base_url.rstrip("/") + path
+        page_text = scrape_page_text(url)
 
-            headers = {
-                "User-Agent": "Mozilla/5.0"
-            }
+        if page_text:
+            all_text += " " + page_text
 
-            response = requests.get(url, headers=headers, timeout=5)
-
-            if response.status_code != 200:
-                continue
-
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-
-            text = soup.get_text(" ", strip=True)
-            full_text += " " + text
-
-        except:
-            continue
-
-    return full_text
+    return all_text
