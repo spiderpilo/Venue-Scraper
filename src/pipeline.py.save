@@ -1,0 +1,26 @@
+def run_pipeline():
+    print("Pipeline started...")
+
+    # temporary dummy data
+    places = [
+        {
+            "name": "Tony's Pizza",
+            "website": "https://example.com",
+            "rating": 4.5
+        }
+    ]
+
+    print("Found places:", places)
+
+    results = []
+
+    for place in places:
+        results.append({
+            "name": place["name"],
+            "incentives": ["10% off", "happy hour"],  # fake for now
+            "rating": place["rating"]
+        })
+
+    print("Processed results:", results)
+
+    return results
