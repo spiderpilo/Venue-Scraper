@@ -1,3 +1,5 @@
+import time
+
 from src.place_search import search_places
 from src.scraper import scrape_venue_pages
 from src.incentive_extractor import extract_incentive
@@ -8,6 +10,9 @@ from src.dataset_builder import build_sentence_dataset, save_sentence_dataset
 
 def run_pipeline():
     print("Pipeline started...")
+    pipeline_start = time.time()
+    successful_scrapes = 0
+    failed_scrapes = 0
 
     # 🔥 Multiple categories to increase dataset size
     categories = [
@@ -45,7 +50,16 @@ def run_pipeline():
     for i, place in enumerate(places, start=1):
         print(f"Checking website for: {place.get('name')}")
 
+        venue_start = time.time()
         website_text = scrape_venue_pages(place.get("website"))
+        venue_elapsed = time.time() - venue_start
+
+        if website_text:
+            successful_scrapes += 1
+        else:
+            failed_scrapes += 1
+
+        print(f"  Scraped in {venue_elapsed:.1f}s ({'ok' if website_text else 'failed'})")
 
         # Store for ML dataset
         places_with_text.append({
@@ -89,5 +103,17 @@ def run_pipeline():
 
     # 💾 Save final venue data
     save_to_json(results)
+
+    total_venues = len(places)
+    elapsed = time.time() - pipeline_start
+    avg_time = elapsed / total_venues if total_venues > 0 else 0
+
+    print("\n--- PIPELINE METRICS ---")
+    print(f"Total venues processed: {total_venues}")
+    print(f"Successful scrapes: {successful_scrapes}")
+    print(f"Failed scrapes: {failed_scrapes}")
+    print(f"Execution time: {elapsed:.2f} seconds")
+    print(f"Average time per venue: {avg_time:.2f} seconds")
+    print(f"Sentence dataset rows: {len(sentence_df)}")
 
     return results

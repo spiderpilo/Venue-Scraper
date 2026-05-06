@@ -4,56 +4,88 @@ import re
 def enrich_fields(place, website_text, incentive):
     text = website_text.lower() if website_text else ""
     business_type = (place.get("type") or "").lower()
-    incentive_text = str(incentive).lower()
-
-    combined_text = text + " " + business_type + " " + incentive_text
 
     return {
-        "Cuisine / Experience Category": infer_experience_category(combined_text, business_type),
-        "Days / Timing Restrictions": extract_timing(combined_text),
-        "Group Friendly?": infer_group_friendly(combined_text),
-        "Psychological Motivator Type": infer_motivator(combined_text),
-        "Estimated Perceived Value ($ range)": extract_value(combined_text),
-        "Expiration / Ongoing": infer_expiration(combined_text),
+        "Cuisine / Experience Category": infer_experience_category(text, business_type),
+        "Days / Timing Restrictions": choose_best_value(
+            incentive.get("timing"),
+            extract_timing(text),
+        ),
+        "Group Friendly?": infer_group_friendly(text),
+        "Psychological Motivator Type": choose_best_value(
+            incentive.get("motivator"),
+            infer_motivator(text),
+        ),
+        "Estimated Perceived Value ($ range)": choose_best_value(
+            incentive.get("value"),
+            extract_value(text),
+        ),
+        "Expiration / Ongoing": choose_best_value(
+            incentive.get("status"),
+            infer_expiration(text),
+        ),
     }
+
+
+def choose_best_value(primary, fallback):
+    if primary and primary != "Unknown":
+        return primary
+
+    if fallback and fallback != "Unknown":
+        return fallback
+
+    return "Unknown"
 
 
 def infer_experience_category(text, business_type):
-    category_rules = {
-        "Live Music": ["live music", "dj", "band", "concert", "karaoke"],
-        "Happy Hour": ["happy hour"],
-        "Brunch": ["brunch", "breakfast", "breakfast_restaurant"],
-        "Seafood": ["seafood", "seafood_restaurant", "fish", "oyster"],
-        "American": ["american_restaurant", "burger", "steak", "sandwich"],
-        "Bar": ["bar", "cocktail", "beer", "wine", "pub", "tavern"],
-        "Pizza": ["pizza"],
-        "Coffee": ["coffee", "cafe"],
-        "Dessert": ["dessert", "ice cream", "bakery"],
-    }
+    if "live music" in text or "dj" in text or "karaoke" in text:
+        return "Live Music"
 
-    for category, keywords in category_rules.items():
-        for keyword in keywords:
-            if keyword in text or keyword in business_type:
-                return category
+    if "happy hour" in text:
+        return "Happy Hour"
+
+    if "breakfast" in business_type or "brunch" in text:
+        return "Brunch"
+
+    if "seafood" in business_type:
+        return "Seafood"
+
+    if "pizza" in business_type or "pizza" in text:
+        return "Pizza"
+
+    if "bar" in business_type or "cocktail" in text or "beer" in text:
+        return "Bar"
+
+    # fallback from Google Places business type
+    if "_restaurant" in business_type:
+        return business_type.replace("_restaurant", "").replace("_", " ").title()
+
+    if business_type:
+        return business_type.replace("_", " ").title()
 
     return "Unknown"
 
 
 def extract_timing(text):
-    timing_patterns = [
+    patterns = [
+        r"\bmon[-–]\s?fri\b",
+        r"\bfri[-–]\s?sun\b",
         r"\b(mon|tue|wed|thu|fri|sat|sun)(day)?\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)(day)?\b",
         r"\b(mon|tue|wed|thu|fri|sat|sun)(day)?\b",
         r"\b\d{1,2}(:\d{2})?\s?(am|pm)\s*[-–]\s*\d{1,2}(:\d{2})?\s?(am|pm)\b",
+        r"\b\d{1,2}(:\d{2})?\s?[-–]\s?\d{1,2}(:\d{2})?\s?(am|pm)\b",
         r"\b\d{1,2}(:\d{2})?\s?(am|pm)\b",
         r"\bdaily\b",
         r"\bevery day\b",
         r"\bweekdays\b",
         r"\bweekends\b",
+        r"\btonight\b",
+        r"\btoday\b",
     ]
 
     matches = []
 
-    for pattern in timing_patterns:
+    for pattern in patterns:
         for match in re.finditer(pattern, text, re.IGNORECASE):
             value = match.group().strip()
 
@@ -75,14 +107,21 @@ def infer_group_friendly(text):
         "banquet",
         "party room",
         "event space",
+        "private events",
     ]
 
     weak_signals = [
         "reservations",
+        "reservation",
+        "book",
+        "table",
+        "dining",
+        "event",
         "events",
-        "catering",
+        "party",
         "parties",
-        "book a table",
+        "group",
+        "catering",
     ]
 
     for signal in strong_signals:
@@ -113,7 +152,7 @@ def infer_motivator(text):
 
 
 def extract_value(text):
-    value_patterns = [
+    patterns = [
         r"\d+% off",
         r"\$\d+ off",
         r"\$\d+",
@@ -122,7 +161,7 @@ def extract_value(text):
         r"no cover",
     ]
 
-    for pattern in value_patterns:
+    for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
 
         if match:
