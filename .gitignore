@@ -2,5 +2,8 @@
 venv/
 models/
 data/processed/
+data/model_output/
+data/raw/
 __pycache__/
 *.pyc
+.DS_Store
