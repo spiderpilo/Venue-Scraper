@@ -1,3 +1,8 @@
 requests
 beautifulsoup4
 python-dotenv
+tensorflow
+numpy
+pandas
+scikit-learn
+playwright
