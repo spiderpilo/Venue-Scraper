@@ -5,6 +5,7 @@ Usage:
     python run_model_pipeline.py                      # first 10 venues
     python run_model_pipeline.py --indices 0,4,5,7    # specific venues by index
     python run_model_pipeline.py --offset 5 --limit 5
+    python run_model_pipeline.py --limit 100 --output model_venues_2026-05-17.json
 """
 
 import argparse
@@ -12,6 +13,7 @@ import json
 import time
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -66,8 +68,11 @@ def venue_to_place(venue: dict) -> dict:
     }
 
 
-def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE):
+def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    out_file = output or OUTPUT_FILE
+    out_path = os.path.join(OUTPUT_DIR, out_file)
 
     all_venues = load_all_venues(source)
 
@@ -78,7 +83,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE):
 
     n_total = len(venues)
     print("\n" + "=" * 65)
-    print(f"  MODEL PIPELINE — {n_total} venues → {OUTPUT_DIR}/{OUTPUT_FILE}")
+    print(f"  MODEL PIPELINE — {n_total} venues → {out_path}")
     print("=" * 65 + "\n")
 
     results = []
@@ -140,7 +145,6 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE):
 
     total_time = time.time() - pipeline_start
 
-    out_path = os.path.join(OUTPUT_DIR, OUTPUT_FILE)
     with open(out_path, "w") as f:
         json.dump(results, f, indent=4)
 
@@ -172,7 +176,10 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--source", type=str, default=DEFAULT_SOURCE,
                         help="Path to source JSON file")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Output filename (default: model_venues_YYYY-MM-DD.json)")
     args = parser.parse_args()
 
     idx = [int(x) for x in args.indices.split(",")] if args.indices else None
-    run(indices=idx, offset=args.offset, limit=args.limit, source=args.source)
+    out = args.output or f"model_venues_{datetime.now().strftime('%Y-%m-%d')}.json"
+    run(indices=idx, offset=args.offset, limit=args.limit, source=args.source, output=out)

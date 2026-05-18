@@ -245,6 +245,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--original", default="data/processed/json_batches_combined_presplit.json",
     )
-    parser.add_argument("--model", default="data/model_output/model_venues.json")
+    parser.add_argument("--model", default=f"data/model_output/model_venues_{__import__('datetime').datetime.now().strftime('%Y-%m-%d')}.json")
     args = parser.parse_args()
     compare(args.original, args.model)
