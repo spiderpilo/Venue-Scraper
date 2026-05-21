@@ -17,7 +17,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.scraper import scrape_venue_pages
+from src.scraper import scrape_venue_pages, fallback_search
 from src.model_extractor import extract_incentive_with_model
 from src.field_enricher import enrich_fields
 
@@ -99,6 +99,10 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
 
         t0 = time.time()
         text = scrape_venue_pages(url)
+        used_fallback = False
+        if not text:
+            text = fallback_search(name, venue.get("city", ""))
+            used_fallback = bool(text)
         scrape_time = time.time() - t0
 
         timing_metrics = {}
@@ -132,6 +136,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
                 "scrape_time_s": round(scrape_time, 2),
                 "inference_time_s": round(infer_time, 2),
                 "text_chars": len(text),
+                "source": "ddg_fallback" if used_fallback else "direct",
             },
         }
 

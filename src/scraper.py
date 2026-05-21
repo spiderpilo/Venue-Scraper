@@ -1,7 +1,14 @@
+import os
 import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, quote_plus
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 _playwright_available = None
 
@@ -95,12 +102,84 @@ def _extract_relevant_text(html: str) -> str:
     return soup.get_text(" ", strip=True)[:MAX_TEXT_CHARS]
 
 
+def _fetch_raw_html(url: str) -> str:
+    try:
+        r = requests.get(url, headers=_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return ""
+        return r.text
+    except Exception:
+        return ""
+
+
 def _fetch_with_requests(url: str) -> str:
     try:
         r = requests.get(url, headers=_HEADERS, timeout=10)
         if r.status_code != 200:
             return ""
         return _extract_relevant_text(r.text)
+    except Exception:
+        return ""
+
+
+_LINK_KEYWORDS = [
+    "happy-hour", "happyhour", "happy_hour", "specials", "special",
+    "deals", "deal", "promo", "promotion", "offer", "offers", "discount",
+    "events", "entertainment", "menu", "drinks", "drink",
+    "dining", "nightly", "weekly", "daily", "food-drink", "food-and-drink",
+]
+
+
+def _score_link(href: str, anchor: str) -> int:
+    text = (href + " " + anchor).lower()
+    return sum(1 for kw in _LINK_KEYWORDS if kw in text)
+
+
+def _extract_internal_links(html: str, base: str) -> list:
+    """Return (full_url, score) for internal links with score > 0, sorted desc."""
+    soup = BeautifulSoup(html, "html.parser")
+    parsed_base = urlparse(base)
+    seen, links = set(), []
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        anchor = a.get_text(" ", strip=True)
+
+        if href.startswith("/"):
+            full_url = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+        elif href.startswith("http"):
+            full_url = href
+        else:
+            continue
+
+        if urlparse(full_url).netloc != parsed_base.netloc:
+            continue
+
+        clean = full_url.rstrip("/").split("?")[0].split("#")[0]
+        if clean in seen or clean == base:
+            continue
+        seen.add(clean)
+
+        score = _score_link(href, anchor)
+        if score > 0:
+            links.append((clean, score))
+
+    return sorted(links, key=lambda x: -x[1])
+
+
+def _fetch_raw_html_playwright(url: str) -> str:
+    """Render a single URL with Playwright and return raw HTML."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context(user_agent=_HEADERS["User-Agent"])
+            page = ctx.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+            page.wait_for_timeout(1_200)
+            html = page.content()
+            browser.close()
+            return html
     except Exception:
         return ""
 
@@ -149,6 +228,31 @@ def scrape_venue_pages(base_url: str) -> str:
             print(f"  → strong incentive content at {path} (score {score}), stopping early")
             break
 
+    # ── Pass 1.5: homepage link discovery ────────────────────────────────────
+    best_so_far = max((_incentive_score(t) for t in page_texts.values()), default=0)
+    if best_so_far < 3:
+        homepage_html = _fetch_raw_html(base)
+        discovered = _extract_internal_links(homepage_html, base)
+
+        # If requests got no useful links, try Playwright-rendered homepage
+        if not discovered and _check_playwright():
+            print(f"  → JS homepage for link discovery…")
+            homepage_html = _fetch_raw_html_playwright(base)
+            discovered = _extract_internal_links(homepage_html, base)
+
+        discovered = discovered[:5]
+        if discovered:
+            print(f"  → crawling {len(discovered)} discovered link(s)…")
+            for link_url, _ in discovered:
+                path_key = urlparse(link_url).path.rstrip("/") or "/"
+                if path_key not in page_texts:
+                    text = _fetch_with_requests(link_url)
+                    page_texts[path_key] = text
+                    score = _incentive_score(text)
+                    if score >= 3:
+                        print(f"    strong content at {path_key} (score {score}), stopping")
+                        break
+
     # ── Pass 2: JS fallback — only on paths where requests returned little ────
     sparse = [p for p, t in page_texts.items() if len(t) < MIN_USEFUL_CHARS]
     if sparse and _check_playwright():
@@ -176,3 +280,43 @@ def scrape_venue_pages(base_url: str) -> str:
     ranked = sorted(page_texts.items(), key=lambda kv: -_incentive_score(kv[1]))
     combined = " ".join(t for _, t in ranked[:2] if t)
     return combined[:MAX_TEXT_CHARS]
+
+
+def fallback_search(venue_name: str, city: str = "") -> str:
+    """
+    Search Google via Serper.dev for the venue's specials/happy hour info.
+    Used when the venue's own website can't be scraped.
+    Returns combined snippet text, or empty string if nothing found.
+    """
+    api_key = os.environ.get("SERPER_API_KEY", "")
+    if not api_key:
+        return ""
+
+    query = f'"{venue_name}" {city} happy hour specials deals'.strip()
+    print(f"  → Serper fallback: {query}")
+    try:
+        r = requests.post(
+            "https://google.serper.dev/search",
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            json={"q": query, "num": 5},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return ""
+
+        data = r.json()
+        parts = []
+        for result in data.get("organic", []):
+            title = result.get("title", "")
+            snippet = result.get("snippet", "")
+            if snippet:
+                parts.append(f"{title}. {snippet}")
+
+        # Also include answer box if present
+        answer = data.get("answerBox", {}).get("answer") or data.get("answerBox", {}).get("snippet", "")
+        if answer:
+            parts.insert(0, answer)
+
+        return " ".join(parts)[:MAX_TEXT_CHARS]
+    except Exception:
+        return ""
