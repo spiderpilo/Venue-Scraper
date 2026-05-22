@@ -2,8 +2,8 @@
 Compare original/presplit ground truth vs ML model output.
 
 Shows per-venue field diffs plus two accuracy scores:
-  • Exact  — model label must match presplit label exactly
-  • Broad  — both are mapped to a common parent before comparing
+  * Exact  -- model label must match presplit label exactly
+  * Broad  -- both are mapped to a common parent before comparing
 
 Usage:
     python compare.py
@@ -13,6 +13,9 @@ Usage:
 
 import argparse
 import json
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # ── label mappings ────────────────────────────────────────────────────────────
 
@@ -154,11 +157,12 @@ def compare(original_path, model_path):
         orig  = orig_idx[vid]
         model = model_idx[vid]
         name  = model.get("venue_name", vid)
-        meta  = model.get("_meta", {})
-        conf  = meta.get("model_confidence", 0.0)
-        chars = meta.get("text_chars", 0)
-        st    = meta.get("scrape_time_s", 0)
-        it    = meta.get("inference_time_s", 0)
+        meta   = model.get("_meta", {})
+        conf   = meta.get("model_confidence", 0.0)
+        chars  = meta.get("text_chars", 0)
+        st     = meta.get("scrape_time_s", 0)
+        it     = meta.get("inference_time_s", 0)
+        ext_src = meta.get("extraction_source", "?")
 
         orig_cat  = orig.get("Incentive Category", "")
         model_cat = model.get("Incentive Category", "")
@@ -169,7 +173,7 @@ def compare(original_path, model_path):
 
         print(f"\n  {'─'*70}")
         print(f"  {name}")
-        print(f"  conf={conf:.2f}  |  {chars:,} chars  |  scrape {st}s  |  infer {it}s")
+        print(f"  conf={conf:.2f}  |  {chars:,} chars  |  scrape {st}s  |  infer {it}s  |  via {ext_src}")
         print(f"  {'─'*70}")
         print(f"  {'Field':<34} {'Reference':<22} {'Model':<22} {'?':>2}")
         print(f"  {'─'*34} {'─'*22} {'─'*22} {'─'*2}")

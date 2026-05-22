@@ -1,8 +1,10 @@
 requests
 beautifulsoup4
 python-dotenv
+anthropic
 tensorflow
 numpy
 pandas
 scikit-learn
 playwright
+playwright-stealth

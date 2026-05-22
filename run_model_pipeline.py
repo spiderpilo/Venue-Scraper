@@ -15,10 +15,11 @@ import os
 import sys
 from datetime import datetime
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.scraper import scrape_venue_pages, fallback_search
-from src.model_extractor import extract_incentive_with_model
+from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
+from src.model_extractor import extract_incentive_with_model, extract_value
 from src.field_enricher import enrich_fields
 
 OUTPUT_DIR  = "data/model_output"
@@ -83,7 +84,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
 
     n_total = len(venues)
     print("\n" + "=" * 65)
-    print(f"  MODEL PIPELINE — {n_total} venues → {out_path}")
+    print(f"  MODEL PIPELINE -- {n_total} venues -> {out_path}")
     print("=" * 65 + "\n")
 
     results = []
@@ -97,17 +98,40 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
         print(f"[{i}/{n_total}] {name}")
         print(f"        {url}")
 
+        btype = venue.get("Business Type", "")
+
         t0 = time.time()
-        text = scrape_venue_pages(url)
-        used_fallback = False
+        text = scrape_venue_pages(url, business_type=btype)
+        scrape_source = "direct"
+        if not text:
+            text = scrape_wayback(url)
+            if text:
+                scrape_source = "wayback"
         if not text:
             text = fallback_search(name, venue.get("city", ""))
-            used_fallback = bool(text)
+            if text:
+                scrape_source = "serper_fallback"
         scrape_time = time.time() - t0
 
         timing_metrics = {}
         t1 = time.time()
-        incentive = extract_incentive_with_model(text, timing_metrics=timing_metrics)
+        incentive = extract_incentive_with_model(
+            text,
+            business_type=btype,
+            timing_metrics=timing_metrics,
+        )
+
+        # ── Value rescue: pricing-targeted search when extraction found no price ─
+        if (incentive.get("value", "Unknown") == "Unknown"
+                and incentive["category"] not in ("No Incentive", "Unknown")):
+            pricing_text = fallback_search_pricing(name, venue.get("city", ""), incentive["category"])
+            if pricing_text:
+                v = extract_value(pricing_text)
+                if v != "Unknown":
+                    incentive = dict(incentive)
+                    incentive["value"] = v
+                    incentive["notes"] = incentive.get("notes", "") + " [value: pricing search]"
+
         infer_time = time.time() - t1
 
         enriched = enrich_fields(place, text, incentive)
@@ -136,15 +160,20 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
                 "scrape_time_s": round(scrape_time, 2),
                 "inference_time_s": round(infer_time, 2),
                 "text_chars": len(text),
-                "source": "ddg_fallback" if used_fallback else "direct",
+                "scrape_source": scrape_source,
+                "extraction_source": incentive.get("source", "unknown"),
+                "scraped_text": text,
             },
         }
 
         results.append(record)
 
         conf = incentive.get("model_confidence", 0.0)
-        print(f"        Category : {incentive['category']}  (conf {conf:.2f})")
+        ext_src = incentive.get("source", "unknown")
+        print(f"        Category : {incentive['category']}  (conf {conf:.2f})  [{ext_src}]")
         print(f"        Teaser   : {incentive['teaser'][:68]}")
+        print(f"        Value    : {incentive.get('value', '—')}")
+        print(f"        Timing   : {incentive.get('timing', '—')}")
         print(f"        Scrape   : {scrape_time:.1f}s | Inference: {infer_time:.1f}s | {len(text):,} chars")
         print()
 
@@ -161,12 +190,15 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
     avg_scrape = sum(r["_meta"]["scrape_time_s"] for r in results) / n
     avg_infer = sum(r["_meta"]["inference_time_s"] for r in results) / n
     avg_conf = sum(r["_meta"]["model_confidence"] for r in results) / n
-    print(f"  Venues processed   : {n}")
+    claude_n = sum(1 for r in results if r["_meta"]["extraction_source"] == "claude")
+    ml_n     = sum(1 for r in results if r["_meta"]["extraction_source"] == "ml_model")
+    print(f"  Venues processed    : {n}")
     print(f"  Successfully scraped: {scraped}/{n}")
-    print(f"  Total wall time    : {total_time:.1f}s")
-    print(f"  Avg scrape/venue   : {avg_scrape:.1f}s")
-    print(f"  Avg inference/venue: {avg_infer:.1f}s")
+    print(f"  Total wall time     : {total_time:.1f}s")
+    print(f"  Avg scrape/venue    : {avg_scrape:.1f}s")
+    print(f"  Avg inference/venue : {avg_infer:.1f}s")
     print(f"  Avg model confidence: {avg_conf:.2f}")
+    print(f"  Extraction source   : {claude_n} claude  |  {ml_n} ml_model")
     print(f"  Saved → {out_path}")
     print("=" * 65 + "\n")
 
@@ -186,5 +218,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     idx = [int(x) for x in args.indices.split(",")] if args.indices else None
-    out = args.output or f"model_venues_{datetime.now().strftime('%Y-%m-%d')}.json"
+    if args.output:
+        out = args.output
+    elif idx:
+        out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_custom.json"
+    else:
+        out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_off{args.offset:04d}.json"
     run(indices=idx, offset=args.offset, limit=args.limit, source=args.source, output=out)
