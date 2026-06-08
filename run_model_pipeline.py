@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
 from src.model_extractor import extract_incentive_with_model, extract_value
 from src.field_enricher import enrich_fields
+from src.schedule_formatter import build_incentives
 
 OUTPUT_DIR  = "data/model_output"
 OUTPUT_FILE = "model_venues.json"
@@ -157,6 +158,12 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
             "Expiration / Ongoing": enriched["Expiration / Ongoing"],
             "Source URL": url,
             "Notes": incentive.get("notes", ""),
+            "incentives": build_incentives({
+                "Incentive Category": incentive["category"],
+                "Full Incentive Description": incentive["description"],
+                "Days / Timing Restrictions": enriched["Days / Timing Restrictions"],
+                "Expiration / Ongoing": enriched["Expiration / Ongoing"],
+            }),
             "_meta": {
                 "model_confidence": round(incentive.get("model_confidence", 0.0), 4),
                 "scrape_time_s": round(scrape_time, 2),
