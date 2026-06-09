@@ -15,8 +15,8 @@ import os
 import sys
 from datetime import datetime
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(__file__))
+# sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+# sys.path.insert(0, os.path.dirname(__file__))
 
 from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
 from src.model_extractor import extract_incentive_with_model, extract_value
@@ -29,7 +29,8 @@ DEFAULT_SOURCE = "data/processed/json_batches_combined_presplit.json"
 
 
 def load_all_venues(path=DEFAULT_SOURCE):
-    with open(path) as f:
+    # with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         content = f.read()
 
     # Handle both plain JSON arrays and concatenated JSON objects
@@ -75,6 +76,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
     out_file = output or OUTPUT_FILE
     out_path = os.path.join(OUTPUT_DIR, out_file)
 
+    # NOTE: This is kinda useless. ALl it does is extract JSON in like 1000 steps.
     all_venues = load_all_venues(source)
 
     if indices is not None:
@@ -101,6 +103,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
         btype = venue.get("Business Type", "")
 
         t0 = time.time()
+        #^ Scrape Venue Pages from scraper.py
         text = scrape_venue_pages(url, business_type=btype)
         scrape_source = "direct"
         if not text:
@@ -134,6 +137,7 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
 
         infer_time = time.time() - t1
 
+        #^ Field Enrichers from field_enrichers.py
         enriched = enrich_fields(place, text, incentive)
 
         record = {
@@ -224,4 +228,6 @@ if __name__ == "__main__":
         out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_custom.json"
     else:
         out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_off{args.offset:04d}.json"
+    
+    #^ Call run function:
     run(indices=idx, offset=args.offset, limit=args.limit, source=args.source, output=out)
