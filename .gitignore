@@ -4,6 +4,8 @@ models/
 data/processed/
 data/model_output/
 data/raw/
+data/golden*
+data/scraped*
 __pycache__/
 *.pyc
 .DS_Store
