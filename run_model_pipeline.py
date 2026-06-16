@@ -55,7 +55,15 @@ def load_all_venues(path=DEFAULT_SOURCE):
             except Exception:
                 break
 
-    return [v for v in venues if v.get("Source URL")]
+    valid = [v for v in venues if v.get("Source URL")]
+
+    if not valid and venues:
+        sample_keys = list(venues[0].keys()) if venues else []
+        print(f"\nERROR: Loaded {len(venues)} records but none have a 'Source URL' field.")
+        print(f"Fields found in your file: {sample_keys}")
+        print("Rename the URL column to 'Source URL' or check the file format.\n")
+
+    return valid
 
 
 def venue_to_place(venue: dict) -> dict:
