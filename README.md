@@ -1,165 +1,137 @@
 # Venue Incentive Scraper
 
-Scrapes venue websites and uses a trained TensorFlow classifier to extract and categorize promotional incentives (happy hours, discounts, live music, etc.), producing structured JSON output.
-
-## How it works
-
-1. **Scraper** — visits a venue's website across priority paths (`/happy-hour`, `/specials`, `/deals`, etc.), falls back to Playwright for JS-rendered pages, Wayback Machine for blocked sites, and Serper for fully unreachable ones.
-2. **Model** — a Bidirectional LSTM classifier scores each sentence and picks the best incentive match. Falls back to Claude API when confidence is low.
-3. **Field enricher** — maps business type and scraped text to structured output fields (cuisine category, group friendliness, timing, value, status).
-4. **Schedule formatter** — converts timing strings into a typed `incentives` block (recurring/always/date_range) with ISO day numbers and `HH:MM:SS` periods for the backend.
-5. **Pipeline** — ties all four together and writes results to `data/model_output/`.
-
-## Incentive categories
-
-| Label | Examples |
-|---|---|
-| Happy Hour | drink specials, afternoon deals, lunch combos |
-| Discount | % off, coupon codes, early bird tickets |
-| Free | free entry, free events, pay what you can |
-| Live Music | concerts, DJ nights, no cover charge |
-| Early Entry | early access + drink, pre-sale entry |
-| Group Booking | group deals, party packages, corporate events |
-| Matinee Deal | twilight tickets, afternoon admission |
-| No Incentive | no promotional content found |
+Scrapes venue websites and automatically detects promotional incentives (happy hours, discounts, live music, etc.), then outputs structured JSON for the backend.
 
 ---
 
-## Quickstart (Docker) — recommended
+## What it does
 
-Docker is the easiest way to run this. No local Python setup needed.
+1. Visits each venue's website and looks for incentive-related content
+2. If the site is blocked or JS-heavy, falls back to Wayback Machine or a Google search
+3. Runs the content through an ML model to classify the incentive
+4. If the model isn't confident enough, asks Claude API to decide
+5. Outputs a structured JSON file with all fields filled in, including a backend-ready `incentives` schedule block
 
-**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+---
 
-### 1. Clone and set up environment
+## Setup
 
-```powershell
+### Requirements
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A `.env` file in the project root with your API keys (see below)
+
+### 1. Clone the repo
+
+```bash
 git clone https://github.com/spiderpilo/Venue-Scraper.git
 cd Venue-Scraper
 ```
 
-Create a `.env` file in the project root with your API keys:
+### 2. Create your `.env` file
+
+Create a file called `.env` in the project root and add:
 
 ```
 ANTHROPIC_API_KEY=your_key_here
 SERPER_API_KEY=your_key_here
 ```
 
-### 2. Build the Docker image
+> ⚠️ Never commit this file. It's already in `.gitignore`.
 
-```powershell
+### 3. Build the Docker image
+
+```bash
 docker build -t venue-scraper .
 ```
 
-First build takes 5–10 minutes (downloads Python, TensorFlow, Playwright). Subsequent builds are fast.
+This takes 5–10 minutes the first time. After that it's instant.
 
-### 3. Run the pipeline
+---
 
-```powershell
-# Test with 10 venues
+## Running the pipeline
+
+### Test run (10 venues)
+
+```bash
 docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
+```
 
-# Full run (all venues)
+### Full run (all 1060 venues)
+
+```bash
 docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 1060 --output my_run.json
-
-# Specific venues by index
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --indices 0,3,7,12
 ```
 
 Output is saved to `data/model_output/` on your local machine.
 
-### 4. Inspect scraped sentences
+---
 
-See exactly which sentences are being fed to the model:
+## Using a different gold standard file
 
-```powershell
+If you have a new list of venues to run:
+
+1. Drop your new JSON file into the `data/processed/` folder
+2. Make sure the file has these fields per venue:
+   - `Source URL` — the venue's website
+   - `venue_name` — display name
+   - `Business Type` — e.g. Bar, Nightclub, Restaurant
+   - `city` — used as a fallback search hint
+3. Run it by pointing `--source` at your file:
+
+```bash
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/YOUR_FILE.json --limit 10
+```
+
+Start with `--limit 10` to verify it's working before doing the full run.
+
+---
+
+## Useful commands
+
+### Run a small test batch
+```bash
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
+```
+
+### Run specific venues by row number
+```bash
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --indices 0,5,12,20
+```
+
+### Run from a specific row onwards
+```bash
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --offset 100 --limit 50
+```
+
+### See what sentences are being scraped (before the model sees them)
+```bash
 docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --source data/processed/All_Venues_w_Incentives.json --limit 10
 ```
+Saves a JSON file to `data/inspect/` showing every sentence pulled from each venue.
 
-Output is saved to `data/inspect/inspect_YYYY-MM-DD_HHMM.json`.
-
-### Using a different gold standard file
-
-Drop the new file into `data/processed/` and pass it via `--source`:
-
-```powershell
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/YOUR_NEW_FILE.json --limit 10
-```
-
-The file needs these fields per venue: `Source URL`, `venue_name`, `Business Type`, `city`.
-
----
-
-## Local setup (alternative)
-
+### Inspect a single venue URL directly
 ```bash
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --url https://example.com --name "Venue Name"
 ```
 
-Then use the same commands without the `docker run ... venue-scraper` prefix:
-
+### Retrain the ML model
 ```bash
-python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
-python scrape_inspect.py --limit 10
+docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python src/trainmodel.py
 ```
 
 ---
 
-## All commands
+## Output format
 
-| Command | What it does |
-|---|---|
-| `python run_model_pipeline.py --source <file> --limit <n>` | Run pipeline on N venues |
-| `python run_model_pipeline.py --indices 0,3,7` | Run on specific venue indices |
-| `python scrape_inspect.py --source <file> --limit <n>` | Dump scraped sentences to JSON |
-| `python scrape_inspect.py --url https://example.com --name "Venue"` | Inspect a single URL |
-| `python src/trainmodel.py` | Train / retrain the ML model |
-| `python compare.py` | Compare model output vs reference |
-| `python benchmark.py` | Quick accuracy benchmark |
-
----
-
-## Project structure
-
-```
-venue-scraper/
-├── src/
-│   ├── scraper.py              # Web scraper (Playwright + Wayback + Serper fallbacks)
-│   ├── model_extractor.py      # BiLSTM sentence classifier
-│   ├── field_enricher.py       # Structured field mapping
-│   ├── schedule_formatter.py   # Converts timing strings to backend schedule format
-│   ├── claude_extractor.py     # Claude API fallback extractor
-│   ├── relabel_pipeline.py     # Re-labels pipeline output for training
-│   └── trainmodel.py           # Model training script
-├── run_model_pipeline.py       # Main pipeline entry point
-├── scrape_inspect.py           # Sentence inspection tool
-├── compare.py                  # Accuracy comparison tool
-├── benchmark.py                # Quick benchmark against ground truth
-├── Dockerfile                  # Docker build config
-├── data/
-│   └── processed/              # Gold standard input files (gitignored)
-│   └── model_output/           # Pipeline results (gitignored)
-│   └── inspect/                # Sentence inspection output (gitignored)
-└── models/                     # Trained model files (gitignored)
-```
-
----
-
-## Output schema
-
-Each venue record includes:
+Each venue in the output JSON looks like this:
 
 ```json
 {
-  "venue_id": "...",
-  "venue_name": "...",
+  "venue_name": "333 Pacific",
   "Incentive Category": "Happy Hour",
-  "Incentive Teaser": "Join us for happy hour Mon–Fri 3–6pm",
+  "Incentive Teaser": "Join us from 3-6pm Wednesday-Sunday for $9 cocktails",
   "Full Incentive Description": "...",
-  "Days / Timing Restrictions": "Monday - Friday, 3pm - 6pm",
+  "Days / Timing Restrictions": "Wednesday-Sunday, 3pm - 6pm",
   "Group Friendly?": "Yes",
   "Psychological Motivator Type": "Value",
   "Estimated Perceived Value ($ range)": "$9",
@@ -172,19 +144,55 @@ Each venue record includes:
       "type": "recurring",
       "priority": null,
       "schedule": {
-        "days": [1, 2, 3, 4, 5],
+        "days": [3, 4, 5, 6, 7],
         "periods": [{ "start": "15:00:00", "end": "18:00:00" }],
         "timezone": "America/Los_Angeles"
       }
     }
-  ],
-  "_meta": {
-    "model_confidence": 0.89,
-    "scrape_time_s": 1.2,
-    "inference_time_s": 0.8,
-    "text_chars": 4500,
-    "scrape_source": "direct",
-    "extraction_source": "ml_model"
-  }
+  ]
 }
+```
+
+The `incentives` block is what the backend consumes. `type` is one of:
+- `recurring` — repeats on set days/times (has a `schedule` with `days` and `periods`)
+- `always` — no time restriction, always available
+- `date_range` — limited to a specific date window (has `start_date` / `end_date`)
+
+---
+
+## Incentive categories
+
+| Category | Examples |
+|---|---|
+| Happy Hour | drink specials, afternoon deals |
+| Discount | % off, coupon codes, early bird |
+| Free | free entry, free events |
+| Live Music | concerts, DJ nights, no cover |
+| Early Entry | early access, arrive before X |
+| Group Booking | group deals, party packages |
+| Matinee Deal | twilight tickets, afternoon admission |
+| No Incentive | no promotional content found |
+
+---
+
+## Project structure
+
+```
+venue-scraper/
+├── src/
+│   ├── scraper.py              # Scrapes websites (Playwright + Wayback + Serper)
+│   ├── model_extractor.py      # ML model that classifies incentives
+│   ├── field_enricher.py       # Fills in structured output fields
+│   ├── schedule_formatter.py   # Builds the backend incentives block
+│   ├── claude_extractor.py     # Claude API fallback
+│   ├── relabel_pipeline.py     # Re-labels data for model retraining
+│   └── trainmodel.py           # Trains the ML model
+├── run_model_pipeline.py       # Main script — runs the full pipeline
+├── scrape_inspect.py           # Debug tool — shows scraped sentences as JSON
+├── Dockerfile
+├── data/
+│   ├── processed/              # Input files go here (gitignored)
+│   ├── model_output/           # Pipeline results (gitignored)
+│   └── inspect/                # Sentence inspection output (gitignored)
+└── models/                     # Trained model files (gitignored)
 ```
