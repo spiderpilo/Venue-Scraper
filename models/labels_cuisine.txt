@@ -1,0 +1,12 @@
+Aquarium
+Bowling
+Casino
+Comedy Club
+Dining
+Entertainment
+Live Music
+Movie Theater
+Museum
+Nightclub
+Other
+Theater
