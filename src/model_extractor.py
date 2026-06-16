@@ -349,6 +349,7 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
     ml_result = None
     if model_available():
         ml_result = _run_ml_model(candidates, btype, timing_metrics, start_time)
+        #^ Add a temporary print inside this function
 
     if ml_result and ml_result["model_confidence"] >= 0.75:
         ml_result["source"] = "ml_model"
@@ -449,6 +450,11 @@ def _run_ml_model(candidates: list, btype: str, timing_metrics, start_time) -> d
             "quality":    quality,
             "score":      confidence * quality,
         })
+        #^ See if there arer any wrong outputs:
+        """
+        for p in result["all_predictions"]:
+            print(p["score"], p["confidence"], p["quality"], p["label"], p["sentence"][:200])
+        """
 
     if not sentence_predictions:
         return None
