@@ -13,3 +13,5 @@ __pycache__/
 
 Test-Harness/data
 scrapy_project/data
+scrapy_project/.scrapy_env
+scrapy_project/venue_scraper/.scrapy
