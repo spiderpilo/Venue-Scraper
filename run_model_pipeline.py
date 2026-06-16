@@ -76,7 +76,11 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
     out_file = output or OUTPUT_FILE
     out_path = os.path.join(OUTPUT_DIR, out_file)
 
-    # NOTE: This is kinda useless. ALl it does is extract JSON in like 1000 steps.
+    if not os.path.exists(source):
+        print(f"\nERROR: Source file not found: {source}")
+        print("Pass your file with --source data/processed/YOUR_FILE.json\n")
+        return []
+
     all_venues = load_all_venues(source)
 
     if indices is not None:
@@ -197,6 +201,9 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
     print("  METRICS")
     print("=" * 65)
     n = len(results)
+    if n == 0:
+        print("  No venues processed.\n")
+        return results
     scraped = sum(1 for r in results if r["_meta"]["text_chars"] > 0)
     avg_scrape = sum(r["_meta"]["scrape_time_s"] for r in results) / n
     avg_infer = sum(r["_meta"]["inference_time_s"] for r in results) / n
