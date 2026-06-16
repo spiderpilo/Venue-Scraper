@@ -264,24 +264,26 @@ def _try_apply_stealth(page):
 def _pw_wait_for_content(page) -> None:
     """
     Wait for a JS-rendered page to fully populate.
-    Strategy: try networkidle (catches SPA data fetches) with a 5s cap,
+    Strategy: try networkidle (catches SPA data fetches) with a 3s cap,
     then scroll to trigger lazy-loaded sections, then a short settle buffer.
     Sites with continuous ad/analytics traffic never reach networkidle, so
     the timeout fallback ensures we don't hang.
     """
     try:
-        page.wait_for_load_state("networkidle", timeout=5_000)
+        page.wait_for_load_state("networkidle", timeout=3_000)
     except Exception:
-        page.wait_for_timeout(1_500)
+        page.wait_for_timeout(1_200)
     try:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(600)
+        page.wait_for_timeout(500)
     except Exception:
         pass
 
 
-def _fetch_raw_html_playwright(url: str) -> str:
+def _fetch_raw_html_playwright(url: str, deadline: float = 0) -> str:
     """Render a single URL with Playwright and return raw HTML."""
+    if deadline and time.time() > deadline:
+        return ""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:
@@ -289,7 +291,7 @@ def _fetch_raw_html_playwright(url: str) -> str:
             ctx = browser.new_context(**_PW_CONTEXT_OPTS)
             page = ctx.new_page()
             _try_apply_stealth(page)
-            page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+            page.goto(url, wait_until="domcontentloaded", timeout=10_000)
             _pw_wait_for_content(page)
             html = page.content()
             browser.close()
@@ -298,7 +300,7 @@ def _fetch_raw_html_playwright(url: str) -> str:
         return ""
 
 
-def _fetch_paths_with_playwright(base: str, paths: list) -> dict:
+def _fetch_paths_with_playwright(base: str, paths: list, deadline: float = 0) -> dict:
     """Open one browser, navigate each path, return {path: relevant_text}."""
     results = {p: "" for p in paths}
     try:
@@ -309,9 +311,12 @@ def _fetch_paths_with_playwright(base: str, paths: list) -> dict:
             page = ctx.new_page()
             _try_apply_stealth(page)
             for path in paths:
+                if deadline and time.time() > deadline:
+                    print(f"  -> scrape budget hit, skipping remaining JS paths")
+                    break
                 url = base + path
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=10_000)
                     _pw_wait_for_content(page)
                     results[path] = _extract_relevant_text(page.content())
                 except Exception:
@@ -347,15 +352,19 @@ def _extra_paths_for_type(business_type: str) -> list:
     return []
 
 
-def scrape_venue_pages(base_url: str, business_type: str = "") -> str:
+def scrape_venue_pages(base_url: str, business_type: str = "", max_time: float = 45.0) -> str:
     if not base_url:
         return ""
 
+    deadline = time.time() + max_time
     base = _clean_base(base_url)
     page_texts: dict[str, str] = {}
 
     # ── Pass 1: requests, priority order, early-stop ──────────────────────────
     for path in INCENTIVE_PATHS:
+        if time.time() > deadline:
+            print(f"  -> scrape budget ({max_time:.0f}s) exceeded in pass 1, stopping")
+            break
         url = base + path
         print(f"Scraping: {url}")
         text = _fetch_with_requests(url)
@@ -368,20 +377,22 @@ def scrape_venue_pages(base_url: str, business_type: str = "") -> str:
 
     # ── Pass 1.5: homepage link discovery ────────────────────────────────────
     best_so_far = max((_incentive_score(t) for t in page_texts.values()), default=0)
-    if best_so_far < 3:
+    if best_so_far < 3 and time.time() < deadline:
         homepage_html = _fetch_raw_html(base)
         discovered = _extract_internal_links(homepage_html, base)
 
         # If requests got no useful links, try Playwright-rendered homepage
-        if not discovered and _check_playwright():
+        if not discovered and _check_playwright() and time.time() < deadline:
             print(f"  -> JS homepage for link discovery...")
-            homepage_html = _fetch_raw_html_playwright(base)
+            homepage_html = _fetch_raw_html_playwright(base, deadline=deadline)
             discovered = _extract_internal_links(homepage_html, base)
 
         discovered = discovered[:5]
         if discovered:
             print(f"  -> crawling {len(discovered)} discovered link(s)...")
             for link_url, _ in discovered:
+                if time.time() > deadline:
+                    break
                 path_key = urlparse(link_url).path.rstrip("/") or "/"
                 if path_key not in page_texts:
                     text = _fetch_with_requests(link_url)
@@ -392,16 +403,15 @@ def scrape_venue_pages(base_url: str, business_type: str = "") -> str:
                         break
 
     # ── Pass 1.6: venue-type deep paths — pricing/admission subpages ─────────
-    # Only runs when content is still sparse AND the venue type has known pricing paths.
-    # These paths (tickets, bottle-service, vip, pricing) commonly hold dollar amounts
-    # that the generic INCENTIVE_PATHS list doesn't reach.
     best_so_far = max((_incentive_score(t) for t in page_texts.values()), default=0)
-    if best_so_far < 3:
+    if best_so_far < 3 and time.time() < deadline:
         extra = _extra_paths_for_type(business_type)
         unseen_extra = [p for p in extra if p not in page_texts]
         if unseen_extra:
             print(f"  -> deep type paths ({business_type}): {unseen_extra}")
             for path in unseen_extra:
+                if time.time() > deadline:
+                    break
                 text = _fetch_with_requests(base + path)
                 page_texts[path] = text
                 score = _incentive_score(text)
@@ -411,11 +421,10 @@ def scrape_venue_pages(base_url: str, business_type: str = "") -> str:
 
     # ── Pass 2: JS fallback — only on paths where requests returned little ────
     sparse = [p for p, t in page_texts.items() if len(t) < MIN_USEFUL_CHARS]
-    if sparse and _check_playwright():
-        # Only bother with the highest-priority sparse paths (cap at 4)
-        priority_sparse = [p for p in INCENTIVE_PATHS if p in sparse][:4]
+    if sparse and _check_playwright() and time.time() < deadline:
+        priority_sparse = [p for p in INCENTIVE_PATHS if p in sparse][:3]
         print(f"  -> JS renderer for {len(priority_sparse)} sparse path(s)...")
-        js = _fetch_paths_with_playwright(base, priority_sparse)
+        js = _fetch_paths_with_playwright(base, priority_sparse, deadline=deadline)
         for path, js_text in js.items():
             if _incentive_score(js_text) > _incentive_score(page_texts.get(path, "")):
                 page_texts[path] = js_text
@@ -611,7 +620,7 @@ def _get_wayback_snapshot(url: str) -> str:
     return ""
 
 
-def scrape_wayback(base_url: str) -> str:
+def scrape_wayback(base_url: str, deadline: float = 0) -> str:
     """
     Try Wayback Machine snapshots for key incentive subpaths.
     Last-resort fallback when the live site is fully bot-blocked.
@@ -625,6 +634,9 @@ def scrape_wayback(base_url: str) -> str:
     best_score = -1
 
     for path in _WAYBACK_PATHS:
+        if deadline and time.time() > deadline:
+            print(f"  -> scrape budget hit, skipping remaining Wayback paths")
+            break
         target = base + path
         snapshot_url = _get_wayback_snapshot(target)
         time.sleep(_WAYBACK_DELAY)   # stay under archive.org rate limit

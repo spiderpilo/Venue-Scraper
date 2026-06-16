@@ -21,6 +21,7 @@ from datetime import datetime
 from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
 from src.model_extractor import extract_incentive_with_model, extract_value
 from src.field_enricher import enrich_fields
+from src.schedule_formatter import build_incentives
 
 OUTPUT_DIR  = "data/model_output"
 OUTPUT_FILE = "model_venues.json"
@@ -29,8 +30,7 @@ DEFAULT_SOURCE = "data/processed/json_batches_combined_presplit.json"
 
 
 def load_all_venues(path=DEFAULT_SOURCE):
-    # with open(path) as f:
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         content = f.read()
 
     # Handle both plain JSON arrays and concatenated JSON objects
@@ -102,12 +102,13 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
 
         btype = venue.get("Business Type", "")
 
+        SCRAPE_BUDGET = 45.0   # seconds — skip JS passes that blow past this
         t0 = time.time()
-        #^ Scrape Venue Pages from scraper.py
-        text = scrape_venue_pages(url, business_type=btype)
+        scrape_deadline = t0 + SCRAPE_BUDGET
+        text = scrape_venue_pages(url, business_type=btype, max_time=SCRAPE_BUDGET)
         scrape_source = "direct"
         if not text:
-            text = scrape_wayback(url)
+            text = scrape_wayback(url, deadline=scrape_deadline)
             if text:
                 scrape_source = "wayback"
         if not text:
@@ -159,6 +160,12 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
             "Expiration / Ongoing": enriched["Expiration / Ongoing"],
             "Source URL": url,
             "Notes": incentive.get("notes", ""),
+            "incentives": build_incentives({
+                "Incentive Category": incentive["category"],
+                "Full Incentive Description": incentive["description"],
+                "Days / Timing Restrictions": enriched["Days / Timing Restrictions"],
+                "Expiration / Ongoing": enriched["Expiration / Ongoing"],
+            }),
             "_meta": {
                 "model_confidence": round(incentive.get("model_confidence", 0.0), 4),
                 "scrape_time_s": round(scrape_time, 2),
