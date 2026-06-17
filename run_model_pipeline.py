@@ -78,7 +78,7 @@ def venue_to_place(venue: dict) -> dict:
     }
 
 
-def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
+def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     out_file = output or OUTPUT_FILE
@@ -93,6 +93,8 @@ def run(indices=None, offset=0, limit=10, source=DEFAULT_SOURCE, output=None):
 
     if indices is not None:
         venues = [all_venues[i] for i in indices if i < len(all_venues)]
+    elif limit is None:
+        venues = all_venues[offset:]
     else:
         venues = all_venues[offset:offset + limit]
 
@@ -236,7 +238,8 @@ if __name__ == "__main__":
     parser.add_argument("--indices", type=str, default=None,
                         help="Comma-separated venue indices, e.g. 0,4,7,11")
     parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Number of venues to process (default: all)")
     parser.add_argument("--source", type=str, default=DEFAULT_SOURCE,
                         help="Path to source JSON file")
     parser.add_argument("--output", type=str, default=None,
