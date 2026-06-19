@@ -22,15 +22,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(__file__))
 
 from src.scraper import scrape_venue_pages, fallback_search, scrape_wayback
-from src.model_extractor import INCENTIVE_KEYWORDS
+from src.model_extractor import _has_incentive_keywords
 
 DEFAULT_SOURCE = "data/processed/json_batches_combined_presplit.json"
 OUTPUT_DIR = "data/inspect"
-
-
-def _has_keyword(s: str) -> bool:
-    sl = s.lower()
-    return any(kw in sl for kw in INCENTIVE_KEYWORDS)
 
 
 def get_candidates(text: str) -> list[str]:
@@ -39,7 +34,7 @@ def get_candidates(text: str) -> list[str]:
     results = []
     for s in raw:
         s = s.strip()
-        if len(s) >= 10 and _has_keyword(s) and s not in seen:
+        if len(s) >= 10 and _has_incentive_keywords(s) and s not in seen:
             seen.add(s)
             results.append(s)
     return results
