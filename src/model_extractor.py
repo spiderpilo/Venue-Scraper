@@ -59,7 +59,7 @@ WEAK_KEYWORDS = [
     "friday", "saturday", "sunday",
     " off", "per person", "per game", "per lane", "pricing",
     "unlimited", "booking", "tasting", "slurpee",
-    "member", "loyalty", "student", "senior", "military",
+    "student", "senior", "military",
 ]
 
 INCENTIVE_KEYWORDS = STRONG_KEYWORDS + WEAK_KEYWORDS
@@ -74,6 +74,11 @@ _BOILERPLATE = [
     "built with", "website builder", "create your website",
     "sign up for free", "log in to your account",
     "subscribe to our newsletter", "join our mailing list",
+    "membership", "member sign", "member login", "become a member",
+    "join as a member", "membership plan", "membership fee",
+    "monthly membership", "annual membership", "member benefits",
+    "members only", "member exclusive", "member pricing",
+    "membership required", "membership includes",
 ]
 
 # Maps strong keywords → most likely incentive category.
@@ -137,8 +142,6 @@ CATEGORY_HINTS = {
     "free admission":      "Free",
     "complimentary":       "Free",
     # Discount
-    "member":              "Discount",
-    "loyalty":             "Discount",
     "season pass":         "Discount",
     "annual pass":         "Discount",
     "day pass":            "Discount",
@@ -346,6 +349,20 @@ def _apply_btype_prior(result: dict, raw_btype: str) -> dict:
     return result
 
 
+_MEMBERSHIP_PHRASES = [
+    "membership", "become a member", "member sign", "member login",
+    "members only", "member exclusive", "membership plan",
+    "membership fee", "monthly membership", "annual membership",
+    "membership required", "membership includes", "member benefits",
+    "join as a member", "member pricing",
+]
+
+
+def _is_membership(result: dict) -> bool:
+    text = (result.get("description", "") + " " + result.get("teaser", "")).lower()
+    return any(p in text for p in _MEMBERSHIP_PHRASES)
+
+
 def extract_incentive_with_model(text: str, business_type: str = "", timing_metrics=None) -> dict:
     start_time = time.time()
     if timing_metrics is not None:
@@ -379,12 +396,9 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
         #^ Add a temporary print inside this function
 
     if ml_result and ml_result["model_confidence"] >= 0.75:
+        if _is_membership(ml_result):
+            return empty_result("Membership-based incentive — skipped")
         ml_result["source"] = "ml_model"
-        # ── Business-type post-processing prior ───────────────────────────────
-        # Correct the most common structural misclassification: nightclub/bar
-        # websites surface drink-special language prominently, so the model
-        # over-predicts Happy Hour. Apply category corrections based on the
-        # venue's business type and the actual content of the best sentence.
         ml_result = _apply_btype_prior(ml_result, business_type)
         if timing_metrics is not None:
             timing_metrics["model_inference_time"] = time.time() - start_time
@@ -394,6 +408,8 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
     # If the best ML sentence contains a strong category-confirming keyword,
     # trust the ML prediction without calling Claude.
     if ml_result and ml_result["model_confidence"] >= 0.50:
+        if _is_membership(ml_result):
+            return empty_result("Membership-based incentive — skipped")
         hint = _category_hint(ml_result["description"])
         if hint and hint == ml_result["category"]:
             ml_result["model_confidence"] = min(ml_result["model_confidence"] + 0.15, 0.95)
@@ -411,13 +427,14 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
 
     if claude.get("category", "No Incentive") == "No Incentive":
         if ml_result and ml_result["category"] != "No Incentive":
+            if _is_membership(ml_result):
+                return empty_result("Membership-based incentive — skipped")
             ml_result["source"] = "ml_model_fallback"
             return ml_result
         return empty_result(claude.get("error", "No incentive detected"))
 
-    category = claude["category"]
-    return {
-        "category":         category,
+    claude_result = {
+        "category":         claude["category"],
         "teaser":           claude.get("teaser") or shorten(claude.get("description", "")),
         "description":      claude.get("description", ""),
         "timing":           claude.get("timing", "Unknown"),
@@ -430,6 +447,11 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
         "all_predictions":  [],
         "source":           "claude",
     }
+
+    if _is_membership(claude_result):
+        return empty_result("Membership-based incentive — skipped")
+
+    return claude_result
 
 
 def _run_ml_model(candidates: list, btype: str, timing_metrics, start_time) -> dict | None:
