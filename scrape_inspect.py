@@ -35,7 +35,14 @@ def _has_keyword(s: str) -> bool:
 
 def get_candidates(text: str) -> list[str]:
     raw = re.split(r"[.!?\n]", text)
-    return [s.strip() for s in raw if len(s.strip()) >= 10 and _has_keyword(s)]
+    seen = set()
+    results = []
+    for s in raw:
+        s = s.strip()
+        if len(s) >= 10 and _has_keyword(s) and s not in seen:
+            seen.add(s)
+            results.append(s)
+    return results
 
 
 def inspect_venue(name: str, url: str, btype: str = "") -> dict:

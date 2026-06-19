@@ -333,10 +333,13 @@ def extract_incentive_with_model(text: str, business_type: str = "", timing_metr
         return empty_result("Could not scrape source")
 
     raw_sentences = re.split(r"[.!?\n]", text)
-    candidates = [
-        s.strip() for s in raw_sentences
-        if len(s.strip()) >= 10 and _has_incentive_keywords(s)
-    ]
+    seen = set()
+    candidates = []
+    for s in raw_sentences:
+        s = s.strip()
+        if len(s) >= 10 and _has_incentive_keywords(s) and s not in seen:
+            seen.add(s)
+            candidates.append(s)
 
     if not candidates:
         if timing_metrics is not None:

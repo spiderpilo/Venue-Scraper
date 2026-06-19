@@ -285,14 +285,86 @@ This gap is structural — not a model bug.
 
 ---
 
+## 2026-06-11
+
+### [13] Bot bypass, Wayback fallback, per-venue timeout
+
+**What changed:**
+- `playwright-stealth` added — patches `navigator.webdriver`, plugins, languages to evade bot detection
+- SPA shell detection (`_is_spa_shell`) — detects React/Next/Vue pages with < 300 chars text, forces Playwright
+- Wayback Machine fallback (`scrape_wayback`) — pulls archived snapshots from archive.org for fully blocked sites
+- Per-venue 45s hard scrape budget — deadline propagation through all passes, Playwright goto capped at 10s, networkidle at 3s
+- Deep type-specific paths for nightclubs (`/tickets`, `/bottle-service`, `/vip`) and bars (`/drink-specials`)
+- Pricing-targeted Serper fallback when value is Unknown
+
+**1060-venue gold standard run:**
+| Metric | 364-venue (v7) | 1060-venue |
+|---|---|---|
+| Successfully scraped | 342/364 (94%) | 785/1060 (74%) |
+| Avg confidence | 0.68 | 0.57 |
+| ML model uses | 78% | 45% |
+| Claude calls | 4% | 8% |
+| Wall time | 70 min | 437 min |
+| Incentive found | — | 748/1060 (71%) |
+
+---
+
+### [14] Structured `incentives` schedule block
+
+**What changed:**
+- New `src/schedule_formatter.py` — parses timing strings into backend-ready format
+- Day parser: handles "Monday - Friday", "Wed-Sun", "daily", individual day names → ISO numbers (1=Mon, 7=Sun)
+- Time parser: "3pm", "4:30PM", "15:00", "3:00pm - 7:00pm" → `HH:MM:SS`
+- Type detector: `recurring` (has days/times), `always` (no timing), `date_range` (specific dates)
+- Wired into `run_model_pipeline.py` — each record gets an `incentives` array
+
+**50-venue sample results:**
+- 43/50 records got populated `incentives` block
+- 415/748 incentives got parsed schedule (days/times) in full 1060-venue run
+
+---
+
+### [15] Sentence deduplication
+
+**Problem:** Scraper hits 8+ pages per site (happy-hour, specials, deals, events, menu, homepage, etc.). Shared headers/footers/nav produce identical sentences. 3Vino's had 50 candidate sentences but only ~5 unique ones.
+
+**Fix:** Deduplicated sentences in `model_extractor.py` and `scrape_inspect.py` using a `seen` set before candidates hit the model. Model now sees more diverse content in its 20-sentence window.
+
+---
+
+### [16] Docker support + team setup
+
+**What changed:**
+- Added `Dockerfile` — Python 3.13-slim + Playwright + Chromium, copies source and models
+- Added `.dockerignore` — excludes `.env`, `data/`, `__pycache__`, `.git/`
+- Removed `models/` from `.gitignore` — model files now in repo so Docker builds work
+- Default `--limit` changed from 10 to all venues
+- Added error message when source file not found or has wrong field names
+- README rewritten with Docker quickstart, useful commands, gold standard swap instructions
+
+---
+
+### [17] `scrape_inspect.py` — sentence inspection tool
+
+**What changed:**
+- New script that scrapes venues and outputs JSON showing every keyword-matched sentence
+- Per-venue: `venue_name`, `url`, `scrape_source`, `raw_text_chars`, `sentence_count`, `sentences[]`
+- Saves to `data/inspect/inspect_YYYY-MM-DD_HHMM.json`
+- Supports `--limit`, `--indices`, `--offset`, `--source`, `--url`, `--output`
+
+---
+
 ## Known Issues / Next Steps
 
 - [x] TextVectorization vocab corruption fixed (whitespace normalization in `_ascii_clean`)
 - [x] Pipeline_neg class imbalance fixed (capped at 60 rows)
 - [x] Full 364-venue pipeline run completed
 - [x] Gold standard comparison run
-- [ ] Happy Hour over-prediction: add business-type post-processing prior
-  (Nightclub/Live Music venue + Happy Hour score → boost Early Entry/Live Music)
-- [ ] 22 venues return 0 chars — anti-bot / site down, need better fallback
-- [ ] 43 missed venues — model returned No Incentive; lower confidence threshold or expand keywords
-- [ ] Relabel v7 pipeline output → retrain v8 with 364-venue real scraped data
+- [x] Happy Hour over-prediction: business-type post-processing prior added (`_apply_btype_prior`)
+- [x] 22 venues return 0 chars: Wayback Machine fallback + playwright-stealth added
+- [x] Per-venue 45s scrape timeout to skip stalled JS-heavy sites
+- [x] Structured `incentives` schedule block for backend
+- [x] Sentence deduplication before model inference
+- [x] Docker support for team deployment
+- [ ] Relabel 1060-venue output → retrain model with larger dataset
+- [ ] 275 venues still return 0 chars — sites fully unreachable
