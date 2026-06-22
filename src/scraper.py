@@ -34,13 +34,20 @@ EARLY_STOP_PATHS = {
 # Keyword list used for per-page scoring and relevant-paragraph extraction
 INCENTIVE_KEYWORDS = [
     "happy hour", "discount", "deal", "special", "promo",
-    "free", "live music", "no cover", "% off", "half off",
+    "live music", "no cover", "% off", "half off",
     "early entry", "matinee", "early bird", "cover charge",
     "admission", "save", "unlimited", "twilight",
     "tasting", "wristband", "group booking", "group event",
     "wednesday", "thursday", "friday", "saturday", "sunday",
-    "$",
 ]
+
+# "free" needs a regex so it doesn't match "gluten free", "sugar free", etc.
+_FREE_RE = re.compile(
+    r"(?<!gluten[- ])(?<!sugar[- ])(?<!duty[- ])(?<!toll[- ])"
+    r"(?<!fat[- ])(?<!risk[- ])(?<!hassle[- ])(?<!free[- ])"
+    r"\bfree\b",
+    re.IGNORECASE,
+)
 
 # Min chars for a page to be considered useful
 MIN_USEFUL_CHARS = 300
@@ -97,7 +104,21 @@ def _incentive_score(text: str) -> int:
     if not text:
         return 0
     lower = text.lower()
-    return sum(1 for kw in INCENTIVE_KEYWORDS if kw in lower)
+    count = sum(1 for kw in INCENTIVE_KEYWORDS if kw in lower)
+    if _FREE_RE.search(text):
+        count += 1
+    return count
+
+
+_HOURS_RE = re.compile(
+    r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b.*\b\d{1,2}(:\d{2})?\s*(am|pm)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_operational_context(text: str) -> bool:
+    """True if text contains opening hours or day+time patterns useful for scheduling."""
+    return bool(_HOURS_RE.search(text))
 
 
 def _is_menu_block(text: str) -> bool:
@@ -115,6 +136,24 @@ def _is_menu_block(text: str) -> bool:
     return has_food_words and not has_deal_context
 
 
+_HERO_SELECTORS = [
+    "[class*=popup]", "[class*=modal]", "[class*=banner]",
+    "[class*=hero]", "[class*=announcement]", "[class*=promo]",
+    "[class*=alert]", "[class*=marquee]",
+]
+
+
+def _extract_hero_text(soup: BeautifulSoup) -> str:
+    """Pull short, high-signal text from hero/banner/popup/modal elements."""
+    parts = []
+    for sel in _HERO_SELECTORS:
+        for el in soup.select(sel):
+            text = el.get_text(" ", strip=True)
+            if 20 <= len(text) <= 500 and _incentive_score(text) >= 1:
+                parts.append(text)
+    return " ".join(parts)
+
+
 def _extract_relevant_text(html: str) -> str:
     """
     Return only the paragraphs/blocks that contain incentive keywords,
@@ -122,22 +161,30 @@ def _extract_relevant_text(html: str) -> str:
     Filters out pure menu-price blocks (many $ amounts with food words, no deal context).
     """
     soup = BeautifulSoup(html, "html.parser")
+
+    hero = _extract_hero_text(soup)
+
     for tag in soup(["script", "style", "nav", "footer", "noscript", "header"]):
         tag.decompose()
 
-    # Gather meaningful text blocks that mention incentives
+    # Gather meaningful text blocks that mention incentives or operating hours
     relevant = []
     for el in soup.find_all(["p", "li", "h1", "h2", "h3", "div", "section", "span"]):
         block = el.get_text(" ", strip=True)
-        if len(block) >= 20 and _incentive_score(block) >= 1:
-            if not _is_menu_block(block):
-                relevant.append(block)
+        if len(block) < 20:
+            continue
+        has_incentive = _incentive_score(block) >= 1
+        has_hours = _has_operational_context(block)
+        if (has_incentive or has_hours) and not _is_menu_block(block):
+            relevant.append(block)
 
-    if relevant:
-        return " ".join(relevant)[:MAX_TEXT_CHARS]
+    body = " ".join(relevant) if relevant else soup.get_text(" ", strip=True)
 
-    # Fallback: whole page text, capped
-    return soup.get_text(" ", strip=True)[:MAX_TEXT_CHARS]
+    if hero:
+        combined = hero + " " + body
+        return combined[:MAX_TEXT_CHARS]
+
+    return body[:MAX_TEXT_CHARS]
 
 
 def _fetch_raw_html(url: str) -> str:
@@ -375,8 +422,9 @@ def scrape_venue_pages(base_url: str, business_type: str = "", max_time: float =
             print(f"  -> strong incentive content at {path} (score {score}), stopping early")
             break
 
-    # ── Pass 1.5: homepage link discovery ────────────────────────────────────
+    # ── Pass 1.5: homepage link discovery + banner extraction ─────────────────
     best_so_far = max((_incentive_score(t) for t in page_texts.values()), default=0)
+    js_homepage_html = ""
     if best_so_far < 3 and time.time() < deadline:
         homepage_html = _fetch_raw_html(base)
         discovered = _extract_internal_links(homepage_html, base)
@@ -384,8 +432,23 @@ def scrape_venue_pages(base_url: str, business_type: str = "", max_time: float =
         # If requests got no useful links, try Playwright-rendered homepage
         if not discovered and _check_playwright() and time.time() < deadline:
             print(f"  -> JS homepage for link discovery...")
-            homepage_html = _fetch_raw_html_playwright(base, deadline=deadline)
-            discovered = _extract_internal_links(homepage_html, base)
+            js_homepage_html = _fetch_raw_html_playwright(base, deadline=deadline)
+            discovered = _extract_internal_links(js_homepage_html, base)
+
+        # Extract homepage content — banners/popups are often JS-rendered
+        if homepage_html:
+            hp_text = _extract_relevant_text(homepage_html)
+            if _incentive_score(hp_text) > _incentive_score(page_texts.get("", "")):
+                page_texts[""] = hp_text
+
+        if _incentive_score(page_texts.get("", "")) < 3 and _check_playwright() and time.time() < deadline:
+            if not js_homepage_html:
+                print(f"  -> JS homepage for banner/popup content...")
+                js_homepage_html = _fetch_raw_html_playwright(base, deadline=deadline)
+            if js_homepage_html:
+                js_hp_text = _extract_relevant_text(js_homepage_html)
+                if _incentive_score(js_hp_text) > _incentive_score(page_texts.get("", "")):
+                    page_texts[""] = js_hp_text
 
         discovered = discovered[:5]
         if discovered:
@@ -433,7 +496,15 @@ def scrape_venue_pages(base_url: str, business_type: str = "", max_time: float =
     if not page_texts:
         return ""
 
-    best_path = max(page_texts, key=lambda p: _incentive_score(page_texts[p]))
+    def _page_rank(text: str) -> float:
+        score = _incentive_score(text)
+        if not text:
+            return 0.0
+        # Normalize: a short block with 3 keywords beats a huge menu with 5
+        length_penalty = len(text) / MAX_TEXT_CHARS
+        return score / (1.0 + length_penalty)
+
+    best_path = max(page_texts, key=lambda p: _page_rank(page_texts[p]))
     best_text = page_texts[best_path]
     best_score = _incentive_score(best_text)
 
@@ -442,7 +513,7 @@ def scrape_venue_pages(base_url: str, business_type: str = "", max_time: float =
     if best_score >= 3 or len(page_texts) == 1:
         return best_text
 
-    ranked = sorted(page_texts.items(), key=lambda kv: -_incentive_score(kv[1]))
+    ranked = sorted(page_texts.items(), key=lambda kv: -_page_rank(kv[1]))
     combined = " ".join(t for _, t in ranked[:2] if t)
     return combined[:MAX_TEXT_CHARS]
 
