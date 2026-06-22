@@ -8,13 +8,16 @@ Usage:
     python scrape_inspect.py --source data/processed/All_Venues_w_Incentives.json --limit 5
     python scrape_inspect.py --url https://example.com --name "My Venue"
     python scrape_inspect.py --output my_output.json
+    python scrape_inspect.py --workers 8               # parallel scraping (default: 5)
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -26,6 +29,8 @@ from src.model_extractor import _has_incentive_keywords
 
 DEFAULT_SOURCE = "data/processed/json_batches_combined_presplit.json"
 OUTPUT_DIR = "data/inspect"
+
+SCRAPE_BUDGET = 45.0
 
 
 def get_candidates(text: str) -> list[str]:
@@ -40,14 +45,12 @@ def get_candidates(text: str) -> list[str]:
     return results
 
 
-def inspect_venue(name: str, url: str, btype: str = "") -> dict:
-    print(f"  Scraping: {name}  ({url})")
-
-    BUDGET = 45.0
+def _scrape_one(name, url, btype):
+    """Scrape a single venue. Returns (text, source, elapsed)."""
     t0 = time.time()
-    deadline = t0 + BUDGET
+    deadline = t0 + SCRAPE_BUDGET
 
-    text = scrape_venue_pages(url, business_type=btype, max_time=BUDGET)
+    text = scrape_venue_pages(url, business_type=btype, max_time=SCRAPE_BUDGET)
     source = "direct"
     if not text:
         text = scrape_wayback(url, deadline=deadline)
@@ -57,8 +60,13 @@ def inspect_venue(name: str, url: str, btype: str = "") -> dict:
         source = "serper" if text else source
 
     elapsed = round(time.time() - t0, 1)
-    candidates = get_candidates(text)
+    return text, source, elapsed
 
+
+def inspect_venue(name: str, url: str, btype: str = "") -> dict:
+    print(f"  Scraping: {name}  ({url})")
+    text, source, elapsed = _scrape_one(name, url, btype)
+    candidates = get_candidates(text)
     print(f"    source={source}  chars={len(text):,}  sentences={len(candidates)}  ({elapsed}s)")
 
     return {
@@ -71,6 +79,66 @@ def inspect_venue(name: str, url: str, btype: str = "") -> dict:
         "sentence_count":     len(candidates),
         "sentences":          candidates,
     }
+
+
+def _inspect_parallel(batch, workers):
+    """Scrape venues in parallel, then build results in order."""
+    n = len(batch)
+    scrape_results = [None] * n
+    progress_lock = threading.Lock()
+    completed = [0]
+
+    def _scrape_with_progress(idx_venue):
+        idx, v = idx_venue
+        name  = v.get("venue_name", "Unknown")
+        url   = v.get("Source URL", "")
+        btype = v.get("Business Type", "")
+        result = _scrape_one(name, url, btype)
+        with progress_lock:
+            completed[0] += 1
+            chars = len(result[0])
+            sys.stderr.write(
+                f"\r  Scraped {completed[0]}/{n}: {name[:30]:<30}  "
+                f"({result[1]}, {chars:,} chars, {result[2]:.1f}s)"
+            )
+            sys.stderr.flush()
+        return idx, result
+
+    old_stdout = sys.stdout
+    sys.stdout = open(os.devnull, "w")
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for idx, result in pool.map(_scrape_with_progress, enumerate(batch)):
+                scrape_results[idx] = result
+    finally:
+        sys.stdout.close()
+        sys.stdout = old_stdout
+
+    sys.stderr.write("\n")
+    sys.stderr.flush()
+
+    results = []
+    for i, v in enumerate(batch):
+        text, source, elapsed = scrape_results[i]
+        candidates = get_candidates(text)
+        name  = v.get("venue_name", "Unknown")
+        url   = v.get("Source URL", "")
+        btype = v.get("Business Type", "")
+
+        print(f"  {name}: source={source}  chars={len(text):,}  sentences={len(candidates)}  ({elapsed}s)")
+
+        results.append({
+            "venue_name":     name,
+            "url":            url,
+            "business_type":  btype,
+            "scrape_source":  source,
+            "scrape_time_s":  elapsed,
+            "raw_text_chars": len(text),
+            "sentence_count": len(candidates),
+            "sentences":      candidates,
+        })
+
+    return results
 
 
 def load_venues(source: str) -> list[dict]:
@@ -89,6 +157,8 @@ if __name__ == "__main__":
     parser.add_argument("--offset",  type=int, default=0)
     parser.add_argument("--limit",   type=int, default=10)
     parser.add_argument("--output",  type=str, default=None, help="Output filename")
+    parser.add_argument("--workers", type=int, default=5,
+                        help="Number of parallel scraping workers (default: 5)")
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -103,14 +173,17 @@ if __name__ == "__main__":
         else:
             batch = venues[args.offset: args.offset + args.limit]
 
-        print(f"\nInspecting {len(batch)} venues from {args.source}\n")
-        results = []
-        for v in batch:
-            results.append(inspect_venue(
+        n = len(batch)
+        print(f"\nInspecting {n} venues from {args.source}\n")
+
+        if args.workers > 1 and n > 1:
+            results = _inspect_parallel(batch, args.workers)
+        else:
+            results = [inspect_venue(
                 v.get("venue_name", "Unknown"),
                 v.get("Source URL", ""),
                 v.get("Business Type", ""),
-            ))
+            ) for v in batch]
 
     out_file = args.output or f"inspect_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json"
     out_path = os.path.join(OUTPUT_DIR, out_file)
