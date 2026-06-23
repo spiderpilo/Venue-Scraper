@@ -19,6 +19,7 @@ COPY src/ src/
 COPY models/ models/
 COPY run_model_pipeline.py .
 COPY scrape_inspect.py .
+COPY test_html_extract.py .
 
 VOLUME ["/app/data"]
 

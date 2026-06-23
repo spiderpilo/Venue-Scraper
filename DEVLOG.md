@@ -368,3 +368,67 @@ This gap is structural — not a model bug.
 - [x] Docker support for team deployment
 - [ ] Relabel 1060-venue output → retrain model with larger dataset
 - [ ] 275 venues still return 0 chars — sites fully unreachable
+- [ ] Integrate static HTML extraction into scraper (replace Playwright)
+
+---
+
+## 2026-06-23
+
+### [18] Scraper text extraction fixes
+
+**Problems found via `scrape_inspect.py`:**
+1. `"free"` in `INCENTIVE_KEYWORDS` matched "gluten free", "sugar free" etc. — pulled in entire menus
+2. `"$"` in `INCENTIVE_KEYWORDS` matched every menu price — 533 Viet Fusion returned 26 menu sentences instead of the actual "3 course summer Special"
+3. Homepage banners/popups (JS-rendered) were being drowned out by menu pages in page selection
+4. Blocks with operating hours (e.g., "Mon-Thu 10am-9pm") were dropped if they lacked incentive keywords
+
+**Fixes (`src/scraper.py`):**
+- Replaced bare `"free"` with regex using negative lookbehinds for "gluten free", "sugar free", "duty free", etc.
+- Removed `"$"` from `INCENTIVE_KEYWORDS` — biggest source of menu noise
+- Added `_extract_hero_text()` — extracts from popup/modal/banner/hero/announcement elements before nav/header stripping
+- Added JS homepage render in Pass 1.5 to capture JS-rendered popups (reuses HTML if already fetched for link discovery)
+- Added `_page_rank()` — normalizes incentive score by text length so short promo blocks beat long menu dumps
+- Added `_has_operational_context()` — keeps blocks with am/pm time ranges for schedule fields even without incentive keywords
+
+**533 Viet Fusion before/after:**
+| | Before | After |
+|---|---|---|
+| Sentences | 26 (menu dump) | 3 |
+| Content | "$12 gluten free Lobster popcorn..." | "Summer Hours 5pm-8:30pm OPEN Friday Saturday Sunday Monday... 3 course summer Special" |
+
+### [19] Parallel scraping
+
+**What changed:**
+- `run_model_pipeline.py` and `scrape_inspect.py` now scrape venues concurrently using `ThreadPoolExecutor`
+- Default 5 workers, configurable via `--workers` flag
+- Scraping output suppressed during parallel phase, progress counter on stderr
+- Model inference stays sequential (TF not thread-safe)
+
+**10-venue benchmark:**
+| | Sequential | Parallel (5 workers) |
+|---|---|---|
+| Wall time | 130s | **47s** |
+| Speedup | — | **2.8x** |
+
+At 1060 venues: estimated ~4h → ~1h.
+
+### [20] Static HTML extraction experiment (`test_html_extract.py`)
+
+**Goal:** Investigate replacing Playwright with static HTML parsing to avoid slow JS rendering.
+
+**Approach:** Fetch raw HTML via `requests`, extract:
+- Visible text (BeautifulSoup)
+- JSON-LD structured data (business type, opening hours, offers)
+- `__NEXT_DATA__` / `__NUXT__` framework data
+- Meta tags (description, og:description)
+
+**Test on AJ Spurs (731K HTML, 422 chars visible — classic JS-heavy Wix site):**
+- JSON-LD: Restaurant type, address, phone, `openingHoursSpecification` with day/time data
+- `/menu` subpage: 5,276 chars of menu text
+- **0.28s** vs ~15s with Playwright
+
+**Findings:**
+- Most venue sites server-side render enough content for basic extraction
+- JSON-LD is the richest source for structured data (hours, business type, location)
+- Dead domains (DNS failures) are the real blocker for ~275 unreachable venues, not JS rendering
+- Static HTML extraction viable as Playwright replacement — to be integrated next session
