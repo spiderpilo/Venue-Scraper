@@ -25,6 +25,7 @@ from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pri
 from src.model_extractor import extract_incentive_with_model, extract_value
 from src.field_enricher import enrich_fields
 from src.schedule_formatter import build_incentives
+from src.teaser_rewriter import rewrite_teaser
 
 OUTPUT_DIR  = "data/model_output"
 OUTPUT_FILE = "model_venues.json"
@@ -184,6 +185,9 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
     infer_time = time.time() - t1
     enriched = enrich_fields(place, text, incentive)
 
+    original_teaser = incentive["teaser"]
+    teaser = rewrite_teaser(original_teaser)
+
     record = {
         "venue_id": venue.get("venue_id"),
         "row": idx,
@@ -194,7 +198,7 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
         "Business Type": venue.get("Business Type"),
         "Cuisine / Experience Category": enriched["Cuisine / Experience Category"],
         "Incentive Category": incentive["category"],
-        "Incentive Teaser": incentive["teaser"],
+        "Incentive Teaser": teaser,
         "Full Incentive Description": incentive["description"],
         "Days / Timing Restrictions": enriched["Days / Timing Restrictions"],
         "Group Friendly?": enriched["Group Friendly?"],
@@ -224,7 +228,8 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
     ext_src = incentive.get("source", "unknown")
     print(f"[{idx}/{n_total}] {name}")
     print(f"        Category : {incentive['category']}  (conf {conf:.2f})  [{ext_src}]")
-    print(f"        Teaser   : {incentive['teaser'][:68]}")
+    rewritten = " [rewritten]" if teaser != original_teaser else ""
+    print(f"        Teaser   : {teaser[:68]}{rewritten}")
     print(f"        Value    : {incentive.get('value', '—')}")
     print(f"        Timing   : {incentive.get('timing', '—')}")
     print(f"        Scrape   : {scrape_time:.1f}s | Inference: {infer_time:.1f}s | {len(text):,} chars")
