@@ -42,6 +42,9 @@ STRONG_KEYWORDS = [
     "birthday package", "book your group",
     "season pass", "annual pass", "day pass",
     "promo", "coupon", "save ", "bogo",
+    "summer special", "lunch special", "dinner special", "weekly special",
+    "today's special", "chef's special", "daily special",
+    "available now", "limited time", "while supplies last",
     "$",
 ]
 
