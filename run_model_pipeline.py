@@ -22,7 +22,8 @@ from datetime import datetime
 # sys.path.insert(0, os.path.dirname(__file__))
 
 from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
-from src.model_extractor import extract_incentive_with_model, extract_value
+from src.llama_extractor import extract_incentive_with_llama
+from src.model_extractor import extract_value
 from src.field_enricher import enrich_fields
 from src.schedule_formatter import build_incentives
 from src.teaser_rewriter import rewrite_teaser
@@ -167,7 +168,7 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
 
     timing_metrics = {}
     t1 = time.time()
-    incentive = extract_incentive_with_model(
+    incentive = extract_incentive_with_llama(
         text, business_type=btype, timing_metrics=timing_metrics,
     )
 
