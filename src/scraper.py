@@ -154,9 +154,33 @@ def _extract_hero_text(soup: BeautifulSoup) -> str:
     return " ".join(parts)
 
 
+def _sibling_text(el, n: int = 2) -> list[str]:
+    """Return text from up to n siblings before and after el."""
+    texts = []
+    prev = el
+    for _ in range(n):
+        prev = prev.find_previous_sibling()
+        if prev is None:
+            break
+        t = prev.get_text(" ", strip=True)
+        if len(t) >= 15:
+            texts.insert(0, t)
+
+    next_ = el
+    for _ in range(n):
+        next_ = next_.find_next_sibling()
+        if next_ is None:
+            break
+        t = next_.get_text(" ", strip=True)
+        if len(t) >= 15:
+            texts.append(t)
+
+    return texts
+
+
 def _extract_relevant_text(html: str) -> str:
     """
-    Return only the paragraphs/blocks that contain incentive keywords,
+    Return blocks that contain incentive keywords plus their surrounding siblings,
     capped at MAX_TEXT_CHARS. Falls back to full page text if nothing matches.
     Filters out pure menu-price blocks (many $ amounts with food words, no deal context).
     """
@@ -167,16 +191,25 @@ def _extract_relevant_text(html: str) -> str:
     for tag in soup(["script", "style", "nav", "footer", "noscript", "header"]):
         tag.decompose()
 
-    # Gather meaningful text blocks that mention incentives or operating hours
+    seen = set()
     relevant = []
+
     for el in soup.find_all(["p", "li", "h1", "h2", "h3", "div", "section", "span"]):
         block = el.get_text(" ", strip=True)
         if len(block) < 20:
             continue
         has_incentive = _incentive_score(block) >= 1
         has_hours = _has_operational_context(block)
-        if (has_incentive or has_hours) and not _is_menu_block(block):
-            relevant.append(block)
+        if not (has_incentive or has_hours):
+            continue
+        if _is_menu_block(block):
+            continue
+
+        # Add the matched block plus surrounding sibling context
+        for text in [block] + _sibling_text(el, n=2):
+            if text not in seen and not _is_menu_block(text):
+                seen.add(text)
+                relevant.append(text)
 
     body = " ".join(relevant) if relevant else soup.get_text(" ", strip=True)
 

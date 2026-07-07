@@ -10,6 +10,8 @@ import time
 
 import requests
 
+from src.model_extractor import _has_incentive_keywords
+
 OLLAMA_MODEL = "llama3.1:8b"
 
 _OLLAMA_URLS = [
@@ -167,9 +169,21 @@ def extract_incentive_with_llama(text: str, business_type: str = "", timing_metr
             timing_metrics["model_inference_time"] = 0.0
         return _empty()
 
+    # Pre-filter to keyword-matched sentences so incentive content isn't
+    # buried past the 3000-char window when the scraper returns a full page fallback
+    sentences = re.split(r"[.!?\n]", text)
+    matched = []
+    seen = set()
+    for s in sentences:
+        s = s.strip()
+        if len(s) >= 10 and _has_incentive_keywords(s) and s not in seen:
+            seen.add(s)
+            matched.append(s)
+
+    filtered_text = " ".join(matched) if matched else text
     prompt = _PROMPT.format(
         business_type=business_type or "Unknown",
-        text=text[:3000],
+        text=filtered_text[:3000],
     )
 
     raw = _call_ollama(prompt)
