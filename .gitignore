@@ -14,11 +14,8 @@ Test-Harness/data
 scrapy_project/data
 scrapy_project/.scrapy_env
 scrapy_project/venue_scraper/.scrapy
-<<<<<<< HEAD
 
 *.json
 *.html
 *.csv
 *.png
-=======
->>>>>>> parent of 1cf6497 (Changes to ignore file)

@@ -190,3 +190,12 @@ class VenueScraperSpider(scrapy.Spider):
 
         finally:
             await page.close()
+
+    async def safe_click(self, locator, timeout=3000, label="element"):
+        try:
+            await locator.click()
+            self.logger.info("Clicked %s.", label)
+            return True
+        except:
+            self.logger.info("Did not find %s. Continuing.", label)
+            return False
