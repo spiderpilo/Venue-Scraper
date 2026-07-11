@@ -23,8 +23,8 @@ class VenueScraperSpider(scrapy.Spider):
         "PLAYWRIGHT_CONTEXTS": {
             "la_context": {
                 "viewport": {
-                    "width": 1920,
-                    "height": 1080,
+                    "width": 820,
+                    "height": 780,
                 },
                 "locale": "en-US",
                 "geolocation": {
@@ -56,9 +56,10 @@ class VenueScraperSpider(scrapy.Spider):
                 "playwright_context" : "la_context",
                 "playwright_page_goto_kwargs" : {
                     "wait_until" : "domcontentloaded",
-                    "timeout" : 15000,
+                    "timeout" : 6000,
                 },
                 "dont_cache": True,
+                "download_timeout": 90,
             },
         )
 
@@ -225,7 +226,7 @@ class VenueScraperSpider(scrapy.Spider):
             await get_page.wait_for_timeout(1000)
             select_button = get_page.get_by_role("button", name=re.compile("SELECT", re.I)).first
             await select_button.wait_for(timeout=1000)
-            await select_button.click()
+            await select_button.click(timeout=timeout)
             return True 
         except:
             self.logger.info("Did not find Search Bar. Continuing")

@@ -5,17 +5,16 @@ NEWSPIDER_MODULE = "venue_scraper.spiders"
 
 # ROBOTSTXT_OBEY = True
 
-USER_AGENT = (
-    "venue-scraper-learning-project/0.1 "
-    "(student research; polite low-volume crawler)"
-)
+USER_AGENT = None 
 
 CONCURRENT_REQUESTS = 2
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 3.0
 RANDOMIZE_DOWNLOAD_DELAY = True
 
-COOKIES_ENABLED = False
+COOKIES_ENABLED = True
+
+PLAYWRIGHT_PROCESS_REQUEST_HEADERS = None
 
 AUTOTHROTTLE_ENABLED = True
 AUTOTHROTTLE_START_DELAY = 3.0
