@@ -1,5 +1,6 @@
 import re
 import scrapy
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 class VenueScraperSpider(scrapy.Spider):
     name = "venue_scraper"
@@ -18,46 +19,60 @@ class VenueScraperSpider(scrapy.Spider):
             "slow_mo": 250,
         },
 
-        # Write on CSV File without -O output.csv
-        "FEEDS" : {
-            'output_file.csv' : {
-                'format' : 'csv',
-                'encoding' : 'utf8',
+        # This replaces browser.new_context(...)
+        "PLAYWRIGHT_CONTEXTS": {
+            "la_context": {
+                "viewport": {
+                    "width": 1920,
+                    "height": 1080,
+                },
+                "locale": "en-US",
+                "geolocation": {
+                    "latitude": 34.0522,
+                    "longitude": -118.2437,
+                },
+                "permissions": ["geolocation"],
             }
         },
 
-        "LOG_LEVEL": "INFO",
+        "HTTPCACHE_ENABLED": False,
         "COOKIES_ENABLED": True,
+        "LOG_LEVEL": "INFO",
         "ITEM_PIPELINES": {},
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.start_url = [
-            # "https://www.novaoc.com/",
-            # "https://lazydogrestaurants.com/",
-            "https://m.yardhouse.com/happy-hour",
-
-        ]
+        self.start_url = "https://m.yardhouse.com/happy-hour"
 
     async def start(self):
-        for url in self.start_url:
-            yield scrapy.Request(
-                url=url,
-                callback=self.parse,
-                meta={
-                    "playwright" : True,
-                    "playwright_include_page" : True,
-                    "playwright_context" : "la_context",
-                    "playwright_page_goto_kwargs" : {
-                        "wait_until" : "domcontentloaded",
-                        "timeout" : 6000,
-                    },
-                }
-            )
+        yield scrapy.Request(
+            url=self.start_url,
+            callback=self.parse,
+            errback=self.errback_close_page,
+            meta={
+                "playwright" : True,
+                "playwright_include_page" : True,
+                "playwright_context" : "la_context",
+                "playwright_page_goto_kwargs" : {
+                    "wait_until" : "domcontentloaded",
+                    "timeout" : 15000,
+                },
+                "dont_cache": True,
+            },
+        )
 
     async def parse(self, response):
         page = response.meta["playwright_page"]
+
+        if page is None:
+            self.logger.error(
+                "No Playwright page attached. flags=%s meta_keys=%s url=%s",
+                response.flags,
+                list(response.meta.keys()),
+                response.url,
+            )
+            return
 
         api_responses = []
 
@@ -152,6 +167,7 @@ class VenueScraperSpider(scrapy.Spider):
             for key, val in result.items():
                 self.logger.info(f"Searched Text[{key or "None"}]: {val or "None"}")
             """
+            
             # yield result
 
             self.logger.info("===============Method 1================")
@@ -193,9 +209,37 @@ class VenueScraperSpider(scrapy.Spider):
 
     async def safe_click(self, locator, timeout=3000, label="element"):
         try:
-            await locator.click()
+            await locator.click(timeout=timeout)
             self.logger.info("Clicked %s.", label)
             return True
         except:
             self.logger.info("Did not find %s. Continuing.", label)
             return False
+    async def safe_search_bar(self, search_box, timeout=1000, search_location="Los Angeles, CA", get_page=None):
+        try:
+            await search_box.wait_for(timeout=1000)
+            await search_box.fill(search_location)
+            await get_page.wait_for_timeout(1000)
+            await search_box.press("ArrowDown")
+            await search_box.press("Enter")
+            await get_page.wait_for_timeout(1000)
+            select_button = get_page.get_by_role("button", name=re.compile("SELECT", re.I)).first
+            await select_button.wait_for(timeout=1000)
+            await select_button.click()
+            return True 
+        except:
+            self.logger.info("Did not find Search Bar. Continuing")
+            return False
+
+    def clean_text(self, text):
+        if not text:
+            return ""
+
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    async def errback_close_page(self, failure):
+        page = failure.request.meta.get("playwright_page")
+        if page is not None and not page.is_closed():
+            await page.close()
