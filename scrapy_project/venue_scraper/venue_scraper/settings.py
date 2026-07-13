@@ -3,7 +3,16 @@ BOT_NAME = "venue_scraper"
 SPIDER_MODULES = ["venue_scraper.spiders"]
 NEWSPIDER_MODULE = "venue_scraper.spiders"
 
-# ROBOTSTXT_OBEY = True
+FEEDS = {
+    "data/scrapy-playwright/scrapy_output_%(batch_id)d.json" : { # Save scraped items in multiple numbered files
+        "format": "json",
+        "overwrite": False, # No overriding, use placeholders in the output path
+    }
+}
+
+FEED_EXPORT_INDENT = 4 # pretty-print the JSON using 4 spaces per nesting level
+
+FEED_EXPORT_BATCH_ITEM_COUNT = 100 # Save up to 100 items per JSON file
 
 USER_AGENT = None 
 
