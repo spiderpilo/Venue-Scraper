@@ -119,21 +119,26 @@ class VenueScraperSpider(scrapy.Spider):
             self.logger.info("==================================BEGIN==================================")
             self.logger.info("Final URL: %s", page.url)
 
-            # self.logger.info("===============Method 5================")
-            method_5 = page.locator("div").filter(
+            match_half_off = page.locator("div").filter(
                 has_text = re.compile("half off", re.I)
             )
 
-            filter_length = await method_5.evaluate_all("""
+            # Filter by Length:
+            # Evaluates all values from match_half_off.
+            # This maps text, word length, and the children of the div/class
+            # to {text, word, children } data structure.
+            # NOTE: Children might not be necessary for the final result.
+            filter_by_length = await match_half_off.evaluate_all("""
                 els => els.map(el => {
                     const text = (el.innerText || "").trim();
-                    const children = [...el.children].map(c => c.innerText.trim()).filter(Boolean);
-                    return { className: el.className, words: text.split(/\\s+/).length, text, children };
+                    return { className: el.className, words: text.split(/\\s+/).length, text };
                 }).filter(row => row.words > 2 && row.words <= 180)
             """)
-            self.logger.info(f"Method 5: {filter_length}")
 
-            for item in filter_length:
+            # Pass filter_by_length Into Function:
+            self.logger.info(filter_by_length)
+
+            for item in filter_by_length:
                 yield item
 
         finally:
@@ -166,7 +171,6 @@ class VenueScraperSpider(scrapy.Spider):
     def clean_text(self, text):
         if not text:
             return ""
-
         text = text.replace("\xa0", " ")
         text = re.sub(r"\s+", " ", text)
         return text.strip()
