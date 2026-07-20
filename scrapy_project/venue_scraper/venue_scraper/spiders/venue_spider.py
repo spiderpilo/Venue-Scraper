@@ -116,7 +116,7 @@ class VenueScraperSpider(scrapy.Spider):
         )   
 
     async def start(self):
-        return scrapy.Request(
+        yield scrapy.Request(
             url=self.start_url, 
             callback=self.parse,
             # errback=self.errback_close_page,
@@ -179,7 +179,7 @@ class VenueScraperSpider(scrapy.Spider):
             await page.wait_for_timeout(750)
 
             await self.handle_cookie_banner(page)
-            await self.handle_location(page, response.url)
+            await self.handle_location(page)
 
             await page.wait_for_timeout(1000)
 
@@ -197,7 +197,7 @@ class VenueScraperSpider(scrapy.Spider):
             for candidate in candidates:
                 yield {
                     "record_type": "offer_candidate",
-                    "venue": self.identify_venue(final_url),
+                    # "venue": self.identify_venue(final_url),
                     "page_url": final_url,
                     "requested_url": response.url,
                     "source_url": response.meta.get("source_url"),
@@ -228,42 +228,36 @@ class VenueScraperSpider(scrapy.Spider):
             if clicked:
                 break
     
-    async def handle_location(self, page, url):
+    async def handle_location(self, page):
         # Keep site-specific interactions isolated.
-        if "yardhouse.com" not in urlparse(url).netloc.lower():
-            return
+        # if "yardhouse.com" not in urlparse(url).netloc.lower():
+        #    return
 
         search_box = page.get_by_placeholder(
             re.compile("Search", re.I)
         ).first
 
-        try:
-            await search_box.wait_for(
-                state="visible",
-                timeout=1500,
-            )
-        except PlaywrightTimeoutError:
-            return
+        await search_box.wait_for(timeout=500)
 
         try:
             await search_box.fill("Los Angeles, CA")
-            await page.wait_for_timeout(700)
+            await page.wait_for_timeout(1000)
             await search_box.press("ArrowDown")
             await search_box.press("Enter")
-            await page.wait_for_timeout(700)
+            await page.wait_for_timeout(1000)
 
             select_button = page.get_by_role(
                 "button",
-                name=re.compile(r"select", re.I),
+                name=re.compile(r"SELECT", re.I),
             ).first
 
-            await select_button.click(timeout=1500)
             await page.wait_for_timeout(1000)
 
+            await select_button.click(timeout=250)
+            await page.wait_for_timeout(250)
+
         except PlaywrightTimeoutError:
-            self.logger.info(
-                "Yard House location interaction was unavailable."
-            )
+            self.logger.info("Yard House location interaction was unavailable.")
 
     async def safe_click(self, locator, timeout=3000, label="element"):
         try:
@@ -382,12 +376,76 @@ class VenueScraperSpider(scrapy.Spider):
 
         return self.deduplicate_candidates(results)
 
+    def deduplicate_candidates(self, candidates):
+        """
+        First remove exact duplicates, then remove larger blocks that add
+        little information beyond an already-retained smaller block.
+        """
+        exact = {}
+
+        for candidate in candidates:
+            normalized = self.normalize_for_comparison(
+                candidate["raw_text"]
+            )
+
+            key = (
+                candidate["matched_keyword"],
+                normalized,
+            )
+
+            previous = exact.get(key)
+
+            if (
+                previous is None
+                or candidate["word_count"] < previous["word_count"]
+            ):
+                exact[key] = candidate
+
+        ordered = sorted(
+            exact.values(),
+            key=lambda row: row["word_count"],
+        )
+
+        retained = []
+
+        for candidate in ordered:
+            candidate_text = self.normalize_for_comparison(
+                candidate["raw_text"]
+            )
+
+            redundant = False
+
+            for existing in retained:
+                existing_text = self.normalize_for_comparison(
+                    existing["raw_text"]
+                )
+
+                if (
+                    existing["matched_keyword"]
+                    == candidate["matched_keyword"]
+                    and existing_text in candidate_text
+                    and candidate["word_count"]
+                    > existing["word_count"] * 2
+                ):
+                    redundant = True
+                    break
+
+            if not redundant:
+                retained.append(candidate)
+
+        return retained    
+
     def clean_text(self, text):
         if not text:
             return ""
         text = text.replace("\xa0", " ")
         text = re.sub(r"\s+", " ", text)
         return text.strip()
+    
+    def normalize_for_comparison(self, text):
+        text = self.clean_text(text).lower()
+        text = re.sub(r"[^\w$%:/.-]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
 
     async def errback_close_page(self, failure):
         page = failure.request.meta.get("playwright_page")
