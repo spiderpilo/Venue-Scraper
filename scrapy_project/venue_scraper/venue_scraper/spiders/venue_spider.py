@@ -39,7 +39,7 @@ class VenueScraperSpider(scrapy.Spider):
             }
         },
 
-        "PLAYWRIGHT_MAX_PAGES_PER_CONTEXT": 2,
+        # "PLAYWRIGHT_MAX_PAGES_PER_CONTEXT": 2,
         "HTTPCACHE_ENABLED": False,
         "COOKIES_ENABLED": True,
         "LOG_LEVEL": "INFO",
@@ -92,9 +92,7 @@ class VenueScraperSpider(scrapy.Spider):
         
         # Start at the homepage for testing
         # Start with 1 URL link
-        self.start_url = [
-            "https://www.yardhouse.com/home"
-            ]
+        self.start_url = "https://www.yardhouse.com/happy-hour"
 
     def make_playwright_request(self, url, depth, source_url, discovery_reason):
         return scrapy.Request(
@@ -118,6 +116,26 @@ class VenueScraperSpider(scrapy.Spider):
         )   
 
     async def start(self):
+        return scrapy.Request(
+            url=self.start_url, 
+            callback=self.parse,
+            # errback=self.errback_close_page,
+            meta={
+                    "playwright" : True,
+                    "playwright_include_page" : True,
+                    "playwright_context" : "la_context",
+                    "playwright_page_goto_kwargs" : {
+                        "wait_until" : "domcontentloaded",
+                        "timeout" : 6000,
+                    },
+                    "dont_cache": True,
+                    "download_timeout": 90,
+                    # "crawl_depth": depth,
+                    # "source_url": source_url,
+                    # "discovery_reason": discovery_reason,
+                },
+        )
+        """
         for url in self.start_urls:
             yield scrapy.make_playwright_request(
                 url=url,
@@ -125,6 +143,7 @@ class VenueScraperSpider(scrapy.Spider):
                 source_url=None,
                 discovery_reason=["seed"], 
             )
+        """
 
     async def parse(self, response):
         page = response.meta["playwright_page"]
@@ -132,6 +151,23 @@ class VenueScraperSpider(scrapy.Spider):
         if page is None:
             self.logger.error("No Playwright page attached. url=%s", response.url)
             return
+
+        # For Debugging:
+        api_responses = []
+
+        # ***Playwright Open URL & Observe Response:***
+        def capture_response(playwright_response):
+            url = playwright_response.url
+
+            if "/api/" in url:
+                api_responses.append(
+                    {
+                        "url": url,
+                        "status": playwright_response.status,
+                    }
+                )
+
+        page.on("response", capture_response)
 
         depth = response.meta.get("crawl_depth",0)
 
