@@ -229,32 +229,24 @@ class VenueScraperSpider(scrapy.Spider):
                 break
     
     async def handle_location(self, page):
-        # Keep site-specific interactions isolated.
-        # if "yardhouse.com" not in urlparse(url).netloc.lower():
-        #    return
-
         search_box = page.get_by_placeholder(
             re.compile("Search", re.I)
         ).first
 
-        await search_box.wait_for(timeout=500)
+        await search_box.wait_for(timeout=250)
 
         try:
             await search_box.fill("Los Angeles, CA")
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(250)
             await search_box.press("ArrowDown")
             await search_box.press("Enter")
-            await page.wait_for_timeout(1000)
-
+            await page.wait_for_timeout(250)
             select_button = page.get_by_role(
                 "button",
-                name=re.compile(r"SELECT", re.I),
+                name=re.compile("SELECT", re.I)
             ).first
-
-            await page.wait_for_timeout(1000)
-
-            await select_button.click(timeout=250)
-            await page.wait_for_timeout(250)
+            await select_button.wait_for(timeout=5000)
+            await select_button.click(timeout=1000)
 
         except PlaywrightTimeoutError:
             self.logger.info("Yard House location interaction was unavailable.")
@@ -384,9 +376,7 @@ class VenueScraperSpider(scrapy.Spider):
         exact = {}
 
         for candidate in candidates:
-            normalized = self.normalize_for_comparison(
-                candidate["raw_text"]
-            )
+            normalized = self.normalize_for_comparison(candidate["raw_text"])
 
             key = (
                 candidate["matched_keyword"],
@@ -395,10 +385,7 @@ class VenueScraperSpider(scrapy.Spider):
 
             previous = exact.get(key)
 
-            if (
-                previous is None
-                or candidate["word_count"] < previous["word_count"]
-            ):
+            if (previous is None or candidate["word_count"] < previous["word_count"]):
                 exact[key] = candidate
 
         ordered = sorted(
@@ -409,24 +396,16 @@ class VenueScraperSpider(scrapy.Spider):
         retained = []
 
         for candidate in ordered:
-            candidate_text = self.normalize_for_comparison(
-                candidate["raw_text"]
-            )
+            candidate_text = self.normalize_for_comparison(candidate["raw_text"])
 
             redundant = False
 
             for existing in retained:
-                existing_text = self.normalize_for_comparison(
-                    existing["raw_text"]
-                )
+                existing_text = self.normalize_for_comparison(existing["raw_text"])
 
-                if (
-                    existing["matched_keyword"]
-                    == candidate["matched_keyword"]
+                if (existing["matched_keyword"] == candidate["matched_keyword"]
                     and existing_text in candidate_text
-                    and candidate["word_count"]
-                    > existing["word_count"] * 2
-                ):
+                    and candidate["word_count"] > existing["word_count"] * 2):
                     redundant = True
                     break
 
