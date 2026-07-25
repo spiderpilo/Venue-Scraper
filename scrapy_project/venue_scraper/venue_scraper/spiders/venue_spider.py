@@ -20,7 +20,7 @@ class VenueScraperSpider(scrapy.Spider):
         # Keep the browser visible while debugging.
         "PLAYWRIGHT_LAUNCH_OPTIONS": {
             "headless": False,
-            "slow_mo": 100,
+            "slow_mo": 250,
         },
 
         # This replaces browser.new_context(...)
@@ -92,8 +92,27 @@ class VenueScraperSpider(scrapy.Spider):
         
         # Start at the homepage for testing
         # Start with 1 URL link
-        self.start_url = "https://www.yardhouse.com/happy-hour"
+        # self.start_url = "https://www.yardhouse.com/happy-hour"
+        # self.start_url = "https://m.yardhouse.com/happy-hour"
+        self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
 
+    async def start(self):
+        yield self.make_playwright_request(
+            url=self.start_url,
+            depth=0,
+            source_url=None,
+            discovery_reason=["seed"],
+        )
+        """
+        Uncomment later for multiply links:
+        for url in self.start_urls:
+            yield scrapy.make_playwright_request(
+                url=url,
+                depth=0,
+                source_url=None,
+                discovery_reason=["seed"], 
+            )
+        """
     def make_playwright_request(self, url, depth, source_url, discovery_reason):
         return scrapy.Request(
             url=url, 
@@ -113,39 +132,9 @@ class VenueScraperSpider(scrapy.Spider):
                     "source_url": source_url,
                     "discovery_reason": discovery_reason,
                 },
-        )   
-
-    async def start(self):
-        yield scrapy.Request(
-            url=self.start_url, 
-            callback=self.parse,
-            # errback=self.errback_close_page,
-            meta={
-                    "playwright" : True,
-                    "playwright_include_page" : True,
-                    "playwright_context" : "la_context",
-                    "playwright_page_goto_kwargs" : {
-                        "wait_until" : "domcontentloaded",
-                        "timeout" : 6000,
-                    },
-                    "dont_cache": True,
-                    "download_timeout": 90,
-                    # "crawl_depth": depth,
-                    # "source_url": source_url,
-                    # "discovery_reason": discovery_reason,
-                },
         )
-        """
-        for url in self.start_urls:
-            yield scrapy.make_playwright_request(
-                url=url,
-                depth=0,
-                source_url=None,
-                discovery_reason=["seed"], 
-            )
-        """
 
-    async def parse(self, response):
+    async def parse_page(self, response):
         page = response.meta["playwright_page"]
 
         if page is None:
@@ -216,6 +205,7 @@ class VenueScraperSpider(scrapy.Spider):
             re.compile(r"accept(?: all)?", re.I),
             re.compile(r"allow all", re.I),
             re.compile(r"agree", re.I),
+            re.compile("Accept", re.I),
         )
 
         for pattern in cookie_patterns:
@@ -229,11 +219,14 @@ class VenueScraperSpider(scrapy.Spider):
                 break
     
     async def handle_location(self, page):
-        search_box = page.get_by_placeholder(
-            re.compile("Search", re.I)
-        ).first
-
-        await search_box.wait_for(timeout=250)
+        # Find a searchbar
+        try:
+            search_box = page.get_by_placeholder(
+                re.compile("Search", re.I)
+            ).first
+            await page.wait_for_timeout(250)
+        except PlaywrightTimeoutError:
+            self.logger.info("Search Bar was unavailable or does not exist.")
 
         try:
             await search_box.fill("Los Angeles, CA")
@@ -249,7 +242,7 @@ class VenueScraperSpider(scrapy.Spider):
             await select_button.click(timeout=1000)
 
         except PlaywrightTimeoutError:
-            self.logger.info("Yard House location interaction was unavailable.")
+            self.logger.info("Input location interaction was unavailable.")
 
     async def safe_click(self, locator, timeout=3000, label="element"):
         try:
