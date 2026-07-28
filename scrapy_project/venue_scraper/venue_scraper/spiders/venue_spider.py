@@ -232,11 +232,9 @@ class VenueScraperSpider(scrapy.Spider):
             search_box = page.get_by_placeholder(
                 re.compile("Search", re.I)
             ).first
-            await page.wait_for_timeout(250)
-        except PlaywrightTimeoutError:
-            self.logger.info("Search Bar was unavailable or does not exist.")
 
-        try:
+            await page.wait_for_timeout(250)
+
             await search_box.fill("Los Angeles, CA")
             await page.wait_for_timeout(250)
             await search_box.press("ArrowDown")
@@ -246,13 +244,19 @@ class VenueScraperSpider(scrapy.Spider):
                 "button",
                 name=re.compile("SELECT", re.I)
             ).first
-            await select_button.wait_for(timeout=5000)
+            await select_button.wait_for(timeout=1000)
             await select_button.click(timeout=1000)
+
+            self.logger.info("Location selected successfully")
+            return True
 
         except PlaywrightTimeoutError:
             self.logger.info("Input location interaction was unavailable.")
+            return False
 
-        except Exception:
+        except Exception: 
+            self.logger.exception("Unexpected error while location selecting.")
+            return False
 
     async def safe_click(self, locator, timeout=3000, label="element"):
         try:
