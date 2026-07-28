@@ -208,15 +208,23 @@ class VenueScraperSpider(scrapy.Spider):
             re.compile("Accept", re.I),
         )
 
-        for pattern in cookie_patterns:
-            clicked = await self.safe_click(
-                page.get_by_role("button", name=pattern).first,
-                timeout=1200,
-                label=f"cookie button: {pattern.pattern}",
-            )
+        try: 
+            for pattern in cookie_patterns:
+                clicked = await self.safe_click(
+                    page.get_by_role("button", name=pattern).first,
+                    timeout=1200,
+                    label=f"cookie button: {pattern.pattern}",
+                )
 
-            if clicked:
-                break
+                if clicked:
+                    break
+            else:
+                raise LookupError("No cookie banner matched.")
+            return True
+
+        except LookupError as exc:
+            self.logger.info("%s", exc)
+            return False
     
     async def handle_location(self, page):
         # Find a searchbar
@@ -244,6 +252,8 @@ class VenueScraperSpider(scrapy.Spider):
         except PlaywrightTimeoutError:
             self.logger.info("Input location interaction was unavailable.")
 
+        except Exception:
+
     async def safe_click(self, locator, timeout=3000, label="element"):
         try:
             await locator.click(timeout=timeout)
@@ -255,90 +265,186 @@ class VenueScraperSpider(scrapy.Spider):
         
     async def extract_offer_candidates(self, page):
         """
-        Extract minimal or near-minimal semantic blocks instead of every
-        ancestor div containing a matching descendant.
+        Find promotional headings, then select the smallest useful ancestor
+        containing both the heading and its supporting descriptive text.
         """
         results = []
 
         for keyword_name, pattern in self.offer_patterns.items():
-            matches = page.get_by_text(pattern)
+            # Start from headings rather than every element containing the text.
+            matches = page.locator(
+                "h1, h2, h3, h4, h5, h6"
+            ).filter(
+                has_text=pattern
+            )
 
             count = await matches.count()
 
+            self.logger.info("Found %d heading matches for keyword=%s", count, keyword_name)
+
             for index in range(min(count, 50)):
-                match = matches.nth(index)
+                heading = matches.nth(index)
 
                 try:
-                    candidate = await match.evaluate("""
-                        node => {
-                            const preferredTags = new Set([
-                                "ARTICLE",
-                                "SECTION",
-                                "LI",
-                                "TR",
-                                "FIGURE"
-                            ]);
-
-                            const maxWords = 180;
-                            const minWords = 2;
-
+                    candidate = await heading.evaluate(
+                        """
+                        heading => {
                             const normalize = value =>
                                 (value || "")
                                     .replace(/\\u00a0/g, " ")
                                     .replace(/\\s+/g, " ")
                                     .trim();
 
-                            const wordCount = value =>
-                                normalize(value)
+                            const wordCount = value => {
+                                const normalized = normalize(value);
+
+                                if (!normalized) {
+                                    return 0;
+                                }
+
+                                return normalized
                                     .split(/\\s+/)
                                     .filter(Boolean)
                                     .length;
+                            };
 
-                            let current = node;
-                            let best = null;
+                            const headingText = normalize(heading.innerText);
+                            const headingWords = wordCount(headingText);
 
-                            for (let level = 0;
-                                 current && level < 7;
-                                 level += 1) {
+                            const candidates = [];
 
+                            let current = heading;
+
+                            for (
+                                let level = 0;
+                                current && level < 7;
+                                level += 1
+                            ) {
                                 const text = normalize(current.innerText);
                                 const words = wordCount(text);
+                                const tag = current.tagName;
+
+                                if (!text || words === 0 || words > 180) {
+                                    current = current.parentElement;
+                                    continue;
+                                }
+
+                                /*
+                                * Supporting text means that this ancestor adds
+                                * useful text beyond the heading itself.
+                                */
+                                const addedWords = words - headingWords;
+                                const hasSupportingText = addedWords >= 3;
+
+                                /*
+                                * Count descendants that commonly represent
+                                * headings or descriptive text.
+                                */
+                                const headingCount = current.querySelectorAll(
+                                    "h1, h2, h3, h4, h5, h6"
+                                ).length;
+
+                                const descriptionCount =
+                                    current.querySelectorAll(
+                                        "p, span"
+                                    ).length;
+
+                                let score = 0;
+
+                                /*
+                                * We want a container that adds a description.
+                                */
+                                if (hasSupportingText) {
+                                    score += 50;
+                                }
+
+                                /*
+                                * Prefer common content-container elements.
+                                */
+                                if (
+                                    tag === "DIV" ||
+                                    tag === "SECTION" ||
+                                    tag === "ARTICLE"
+                                ) {
+                                    score += 25;
+                                }
+
+                                /*
+                                * A heading plus nearby text is a strong sign
+                                * that this is the intended content card.
+                                */
+                                if (
+                                    headingCount >= 1 &&
+                                    descriptionCount >= 1
+                                ) {
+                                    score += 25;
+                                }
+
+                                /*
+                                * Prefer smaller, more local containers.
+                                */
+                                score -= level * 3;
+                                score -= Math.max(0, words - 40) * 0.5;
+
+                                /*
+                                * Penalize interactive and navigational wrappers.
+                                * Their text may be correct, but they usually
+                                * describe UI structure rather than the offer.
+                                */
+                                if (tag === "BUTTON") {
+                                    score -= 30;
+                                }
+
+                                if (tag === "LI") {
+                                    score -= 25;
+                                }
 
                                 if (
-                                    words >= minWords &&
-                                    words <= maxWords
+                                    tag === "UL" ||
+                                    tag === "OL" ||
+                                    tag === "NAV"
                                 ) {
-                                    best = {
-                                        text,
-                                        words,
-                                        tag: current.tagName,
-                                        class_name:
-                                            typeof current.className === "string"
-                                                ? current.className
-                                                : "",
-                                        dom_level: level,
-                                        semantic:
-                                            preferredTags.has(current.tagName)
-                                    };
-
-                                    /*
-                                     * Prefer the first useful semantic
-                                     * container. Otherwise continue upward
-                                     * briefly to collect nearby details.
-                                     */
-                                    if (best.semantic && words >= 5) {
-                                        break;
-                                    }
+                                    score -= 50;
                                 }
+
+                                candidates.push({
+                                    text,
+                                    words,
+                                    added_words: addedWords,
+                                    tag,
+                                    class_name:
+                                        typeof current.className === "string" ? current.className
+                                            : "",
+                                    dom_level: level,
+                                    score,
+                                    has_supporting_text: hasSupportingText,
+                                    heading_count: headingCount,
+                                    description_count: descriptionCount
+                                });
 
                                 current = current.parentElement;
                             }
 
-                            return best;
-                        }
-                    """)
+                            /*
+                            * Only consider nodes that include useful supporting
+                            * text. Sort by score and return the best one.
+                            */
+                            const useful = candidates.filter(
+                                candidate =>
+                                    candidate.has_supporting_text
+                            );
 
-                except Exception:
+                            useful.sort(
+                                (a, b) => b.score - a.score
+                            );
+
+                            return useful.length > 0 ? useful[0] : null;
+                        }
+                        """
+                    )
+
+                except Exception as exc:
+                    self.logger.warning("Candidate evaluation failed: %s", exc)
                     continue
 
                 if not candidate:
@@ -353,10 +459,16 @@ class VenueScraperSpider(scrapy.Spider):
                     "matched_keyword": keyword_name,
                     "raw_text": text,
                     "word_count": candidate["words"],
+                    "added_word_count": candidate["added_words"],
                     "tag": candidate["tag"],
                     "class_name": candidate["class_name"],
                     "dom_level": candidate["dom_level"],
-                    "extraction_method": "keyword_ancestor_search",
+                    "candidate_score": candidate["score"],
+                    "heading_count": candidate["heading_count"],
+                    "description_count":
+                        candidate["description_count"],
+                    "extraction_method":
+                        "heading_context_container",
                 })
 
         return self.deduplicate_candidates(results)

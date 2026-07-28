@@ -4,7 +4,7 @@ SPIDER_MODULES = ["venue_scraper.spiders"]
 NEWSPIDER_MODULE = "venue_scraper.spiders"
 
 FEEDS = {
-    "data/scrapy-playwright/scrapy_output.json" : { # Save scraped items in multiple numbered files
+    "data/scrapy-playwright/scaper_output.json" : { # Save scraped items in multiple numbered files
         "format": "json",
         # "batch_item_count": 100,
         "overwrite": True, # No overriding, use placeholders in the output path
