@@ -50,16 +50,25 @@ EXAMPLES OF NO INCENTIVE:
 - "Award-winning cuisine crafted from locally sourced seasonal ingredients" → No Incentive (marketing copy)
 - "Must be 21 or older to enter. Valid ID required." → No Incentive (policy)
 - "View Menu Reserve Now Welcome To Taqueria Las Milpas" → No Incentive (nav/boilerplate)
+- "Become a member and enjoy exclusive benefits" → No Incentive (membership upsell)
+- "Subscribe to our newsletter for updates" → No Incentive (newsletter/subscription)
+- "Join our loyalty program and earn points" → No Incentive (loyalty program signup)
+- "Annual membership includes unlimited visits" → No Incentive (membership plan)
 
 Analyze the text below. Extract the single BEST incentive if one exists.
-If the text only contains hours, location, menu items, or generic descriptions — return No Incentive.
+If the text only contains hours, location, menu items, generic descriptions, membership plans, or newsletter signups — return No Incentive.
+
+You MUST attempt to fill in ALL THREE of: teaser, timing, and value. Search the text carefully.
+- timing: look for days of the week, time ranges, "daily", "every Friday", "weekends", etc.
+- value: look for prices ($5, $9), percentages (20% off), or words like "free", "half price", "no cover"
+- teaser: one sentence describing what the offer is (not just repeating timing or price)
 
 Respond with JSON only, no explanation:
 {{
   "category": "<one of: Happy Hour | Live Music | Early Entry | Discount | Free | Group Booking | Matinee Deal | No Incentive>",
-  "teaser": "<one sentence max 10 words describing the incentive, empty string if No Incentive>",
-  "timing": "<days and times the incentive applies, or Unknown>",
-  "value": "<price or discount amount e.g. $9 or 50% off, or Unknown>"
+  "teaser": "<one sentence max 10 words describing the offer, empty string if No Incentive>",
+  "timing": "<days and times the incentive applies, or Unknown if not mentioned>",
+  "value": "<price or discount e.g. $9 or 50% off or 'free', or Unknown if not mentioned>"
 }}
 
 Venue type: {business_type}
@@ -87,6 +96,21 @@ _VALID_CATEGORIES = {
     "Happy Hour", "Live Music", "Early Entry", "Discount",
     "Free", "Group Booking", "Matinee Deal", "No Incentive",
 }
+
+_MEMBERSHIP_PHRASES = {
+    "membership", "become a member", "member sign", "member login",
+    "members only", "member exclusive", "membership plan",
+    "membership fee", "monthly membership", "annual membership",
+    "membership required", "membership includes", "member benefits",
+    "join as a member", "member pricing", "loyalty program",
+    "subscribe to our", "join our mailing", "sign up for our",
+    "newsletter", "rewards program", "points program",
+}
+
+
+def _is_membership(teaser: str) -> bool:
+    lower = teaser.lower()
+    return any(p in lower for p in _MEMBERSHIP_PHRASES)
 
 
 def _call_ollama(prompt: str, timeout: float = 30.0) -> str:
@@ -210,13 +234,18 @@ def extract_incentive_with_llama(text: str, business_type: str = "", timing_metr
     timing = parsed.get("timing", "Unknown") or "Unknown"
     value  = parsed.get("value", "Unknown") or "Unknown"
 
+    if _is_membership(teaser):
+        return _empty()
+
     motivator = _derive_motivator(category, teaser + " " + timing)
     status    = _infer_status(teaser + " " + timing)
+
+    description = f"{teaser} | {timing} | {value}"
 
     return {
         "category":         category,
         "teaser":           teaser,
-        "description":      teaser,
+        "description":      description,
         "timing":           timing,
         "motivator":        motivator,
         "cuisine":          "Unknown",
