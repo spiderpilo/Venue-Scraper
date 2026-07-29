@@ -1,449 +1,541 @@
-import csv
 import re
-from urllib.parse import urlparse
+from collections import defaultdict
+from urllib.parse import urljoin, urlparse, urldefrag
 
-import os
-import random
 import scrapy
-from scrapy.linkextractors import LinkExtractor
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-# from venue_scraper.items import VenueScrapeItem
+class VenueScraperSpider(scrapy.Spider):
+    name = "venue_scraper"
 
+    custom_settings = {
+        # Scrapy-Playwright Custom Settings:
+        "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
 
-from keyword_bank import (
-    INCENTIVE_KEYWORDS,
-    LINK_KEYWORDS,
-    NOISE_PHRASES,
-    MENU_FOOD_WORDS
-)
+        "DOWNLOAD_HANDLERS": {
+            "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+            "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+        },
 
-PATH = "data/src/golden_model.csv"
+        # Keep the browser visible while debugging.
+        "PLAYWRIGHT_LAUNCH_OPTIONS": {
+            "headless": False,
+            "slow_mo": 250,
+        },
 
-class VenueSpider(scrapy.Spider):
-    name = "venues"
-    # Scrape:
-    #   NOVA Kitchen & Bar
-    #   Lazy Dog Restaurant & Bar
-    #   Rancho Capistrano Winery
-    # allowed_domains = ["https://www.novaoc.com/", "https://lazydogrestaurants.com/", "https://www.ranchocapwinery.com/"]
-    # start_urls = ["https://www.novaoc.com/", "https://lazydogrestaurants.com/", "https://www.ranchocapwinery.com/"]
-    start_urls = ["https://www.novaoc.com/"]
+        # This replaces browser.new_context(...)
+        "PLAYWRIGHT_CONTEXTS": {
+            "la_context": {
+                "viewport": {
+                    "width": 820,
+                    "height": 780,
+                },
+                "locale": "en-US",
+                "geolocation": {
+                    "latitude": 34.0522,
+                    "longitude": -118.2437,
+                },
+                "permissions": ["geolocation"],
+            }
+        },
 
-    def parse_homepage(self, response):
-        homepage_chunks = self.extract_candidate_chunks(response)
-        pass
+        # "PLAYWRIGHT_MAX_PAGES_PER_CONTEXT": 2,
+        "HTTPCACHE_ENABLED": False,
+        "COOKIES_ENABLED": True,
+        "LOG_LEVEL": "INFO",
+        "ITEM_PIPELINES": {},
+    }
 
-    def extract_candidate_chunks(self, response):
-        chunks = []
+    offer_patterns = {
+        "happy_hour": re.compile(r"\bhappy\s*hour\b", re.I),
+        "half_off": re.compile(
+            r"\b(?:half[\s-]*off|1\s*/\s*2\s*off|50\s*%\s*off)\b",
+            re.I,
+        ),
+    }
 
-        selectors = response.css(
-            "h1, h2, h3, h4, p, li, article, section, div"
-        )
+    link_term_weights = {
+        "happy hour": 100,
+        "half off": 100,
+        "specials": 75,
+        "promotions": 70,
+        "offers": 70,
+        "deals": 65,
+        "menu": 50,
+        "brunch": 40,
+        "food": 15,
+        "drink": 15,
+    }
 
-        for idx, selector in enumerate(selectors):
-            text = " ".join(selector.css("::text").getall())
-            text = self.clean_text(text)
+    excluded_link_terms = {
+        "gift card",
+        "gift-card",
+        "rewards",
+        "loyalty",
+        "account",
+        "login",
+        "sign in",
+        "sign-in",
+        "careers",
+        "privacy",
+        "accessibility",
+        "nutrition",
+        "contact us",
+    }
 
-    def clean_text(self, text):
-        text = text or ""
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
+    max_depth = 2
+    max_followed_links_per_page = 5
+    min_link_score = 40
 
-"""
-    def __init__(self, csv_path=PATH, limit=10, random_seed=42, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.csv_path = csv_path
-        self.limit = int(limit)
-        self.random_seed = int(random_seed)
-        self.records_by_url = {}
-"""
-"""
+        
+        # Start at the homepage for testing
+        # Start with 1 URL link
+        # self.start_url = "https://www.yardhouse.com/happy-hour"
+        # self.start_url = "https://m.yardhouse.com/happy-hour"
+        self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
+
     async def start(self):
-        records = self.load_golden_records(self.csv_path, self.limit)
-
-        for record in records:
-            url = record["Source URL"].strip()
-            self.records_by_url[url] = record
-
-            yield scrapy.Request(
+        yield self.make_playwright_request(
+            url=self.start_url,
+            depth=0,
+            source_url=None,
+            discovery_reason=["seed"],
+        )
+        """
+        Uncomment later for multiply links:
+        for url in self.start_urls:
+            yield scrapy.make_playwright_request(
                 url=url,
-                callback=self.parse_homepage,
-                errback=self.errback_venue,
-                meta={
-                    "gold_record": record,
-                    "base_url": url,
-                    "stage": "homepage",
-                    "candidate_chunks": [],
-                    "visited_count": 0,
-                },
-                dont_filter=True,
+                depth=0,
+                source_url=None,
+                discovery_reason=["seed"], 
             )
-"""
-"""
-    def load_golden_records(self, csv_path, limit):
-        self.logger.info("Current working directory: %s", os.getcwd())
-        self.logger.info("CSV path argument: %s", csv_path)
-        self.logger.info("CSV exists: %s", os.path.exists(csv_path))
-
-        required = [
-            "venue_name",
-            "Source URL",
-            "Business Type",
-            # "Experience Category",
-            "Incentive Category",
-            "Incentive Teaser",
-            "Full Incentive Description",
-        ]
-
-        candidates = []
-        seen_urls = set()
-
-        with open(csv_path, newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            self.logger.info("CSV columns: %s", reader.fieldnames)
-
-            total_rows = 0
-            missing_required = 0
-            bad_url = 0
-            duplicate_url = 0
-
-            for row in reader:
-                total_rows += 1
-
-                if not all((row.get(col) or "").strip() for col in required):
-                    missing_required += 1
-                    continue
-
-                url = row["Source URL"].strip()
-
-                if not url.startswith("http") or re.search(r"\s", url):
-                    bad_url += 1
-                    continue
-
-                if url in seen_urls:
-                    duplicate_url += 1
-                    continue
-
-                seen_urls.add(url)
-                candidates.append(row)
-
-        rng = random.Random(getattr(self, "random_seed", 42))
-        rng.shuffle(candidates)
-        output = candidates[:limit]
-
-        self.logger.info("Total CSV rows seen: %d", total_rows)
-        self.logger.info("Rows skipped missing required fields: %d", missing_required)
-        self.logger.info("Rows skipped bad URL: %d", bad_url)
-        self.logger.info("Rows skipped duplicate URL: %d", duplicate_url)
-        self.logger.info("Candidate rows after cleaning: %d", len(candidates))
-        self.logger.info("Rows selected for scraping: %d", len(output))
-
-        for r in output:
-            self.logger.info("Selected venue: %s | %s", r.get("venue_name"), r.get("Source URL"))
-
-        return output
-"""
-"""
-    def parse_homepage(self, response):
-        gold = response.meta["gold_record"]
-        base_url = response.meta["base_url"]
-
-        homepage_chunks = self.extract_candidate_chunks(response)
-        candidate_chunks = list(homepage_chunks)
-
-        # Always yield the homepage result first so every input URL produces a row.
-        yield self.build_item(
-            response=response,
-            gold=gold,
-            candidate_chunks=candidate_chunks,
-            scrape_stage="homepage_debug",
-        )
-
-        likely_links = self.extract_likely_internal_links(response, base_url)
-        likely_links = likely_links[:4]
-
-        for link in likely_links:
-            yield scrapy.Request(
-                url=link,
-                callback=self.parse_candidate_page,
-                errback=self.errback_venue,
-                meta={
-                    "gold_record": gold,
-                    "base_url": base_url,
-                    "stage": "candidate_page",
-                    "candidate_chunks": candidate_chunks,
-                    "visited_count": 1,
-                    "handle_httpstatus_all": True,
+        """
+    def make_playwright_request(self, url, depth, source_url, discovery_reason):
+        return scrapy.Request(
+            url=url, 
+            callback=self.parse_page,
+            errback=self.errback_close_page,
+            meta={
+                    "playwright" : True,
+                    "playwright_include_page" : True,
+                    "playwright_context" : "la_context",
+                    "playwright_page_goto_kwargs" : {
+                        "wait_until" : "domcontentloaded",
+                        "timeout" : 6000,
+                    },
+                    "dont_cache": True,
+                    "download_timeout": 90,
+                    "crawl_depth": depth,
+                    "source_url": source_url,
+                    "discovery_reason": discovery_reason,
                 },
-                dont_filter=True,
+        )
+
+    async def parse_page(self, response):
+        page = response.meta["playwright_page"]
+
+        if page is None:
+            self.logger.error("No Playwright page attached. url=%s", response.url)
+            return
+
+        # For Debugging:
+        api_responses = []
+
+        # ***Playwright Open URL & Observe Response:***
+        def capture_response(playwright_response):
+            url = playwright_response.url
+
+            if "/api/" in url:
+                api_responses.append(
+                    {
+                        "url": url,
+                        "status": playwright_response.status,
+                    }
+                )
+
+        page.on("response", capture_response)
+
+        depth = response.meta.get("crawl_depth",0)
+
+        try:
+            # Print URL & Page Status
+            self.logger.info("Opened page: %s", response.url)
+            self.logger.info("Initial Scrapy status: %s", response.status)
+
+            await page.wait_for_timeout(750)
+
+            await self.handle_cookie_banner(page)
+            await self.handle_location(page)
+
+            await page.wait_for_timeout(1000)
+
+            final_url = page.url
+            title = await page.title()
+
+            self.logger.info(
+                "Extracting page depth=%d url=%s",
+                depth,
+                final_url,
             )
-"""
-"""
-    def parse_candidate_page(self, response):
-        gold = response.meta["gold_record"]
-        existing_chunks = response.meta.get("candidate_chunks", [])
 
-        page_chunks = self.extract_candidate_chunks(response)
-        all_chunks = existing_chunks + page_chunks
+            candidates = await self.extract_offer_candidates(page)
 
-        yield self.build_item(
-            response=response,
-            gold=gold,
-            candidate_chunks=all_chunks,
-            scrape_stage="homepage_plus_candidate_page",
+            for candidate in candidates:
+                yield {
+                    "record_type": "offer_candidate",
+                    # "venue": self.identify_venue(final_url),
+                    "page_url": final_url,
+                    "requested_url": response.url,
+                    "source_url": response.meta.get("source_url"),
+                    "page_title": title,
+                    "crawl_depth": depth,
+                    "discovery_reason":
+                        response.meta.get("discovery_reason", []),
+                    **candidate,
+                }
+
+        finally:
+            await page.close()
+
+    async def handle_cookie_banner(self, page):
+        cookie_patterns = (
+            re.compile(r"accept(?: all)?", re.I),
+            re.compile(r"allow all", re.I),
+            re.compile(r"agree", re.I),
+            re.compile("Accept", re.I),
         )
 
-    def extract_likely_internal_links(self, response, base_url):
-        base_domain = urlparse(base_url).netloc.lower().replace("www.", "")
+        try: 
+            for pattern in cookie_patterns:
+                clicked = await self.safe_click(
+                    page.get_by_role("button", name=pattern).first,
+                    timeout=1200,
+                    label=f"cookie button: {pattern.pattern}",
+                )
 
-        extractor = LinkExtractor(
-            allow_domains=[base_domain],
-            deny_extensions=[
-                "jpg", "jpeg", "png", "gif", "webp", "svg",
-                "pdf", "zip", "mp4", "mov", "mp3",
-            ],
-            unique=True,
-        )
-
-        scored_links = []
-
-        for link in extractor.extract_links(response):
-            href = link.url
-            text = f"{link.text or ''} {href}".lower()
-
-            score = self.score_link_text(text)
-
-            if score <= 0:
-                continue
-
-            scored_links.append((href, score))
-
-        scored_links.sort(key=lambda x: x[1], reverse=True)
-
-        return [href for href, score in scored_links]
-
-    def extract_candidate_chunks(self, response):
-        chunks = []
-
-        selectors = response.css(
-            "h1, h2, h3, h4, p, li, article, section, div"
-        )
-
-        for idx, selector in enumerate(selectors):
-            text = " ".join(selector.css("::text").getall())
-            text = self.clean_text(text)
-
-            if len(text) < 30:
-                continue
-
-            if self.is_noise(text):
-                continue
-
-            if self.is_menu_block(text):
-                continue
-
-            score = self.score_text(text)
-
-            if score <= 0:
-                continue
-
-            chunks.append({
-                "chunk_id": idx,
-                "text": text[:1000],
-                "chars": len(text),
-                "score": score,
-                "keyword_hits": self.keyword_hits(text),
-                "has_price": bool(re.search(r"\$\s?\d+", text)),
-                "has_percent": bool(re.search(r"\d+\s?%", text)),
-                "has_time": bool(re.search(r"\b(mon|tue|wed|thu|fri|sat|sun|daily|weekly|happy hour|\d{1,2}\s?(am|pm))\b", text, re.I)),
-            })
-
-        chunks.sort(key=lambda c: c["score"], reverse=True)
-        return chunks[:20]
-
-    def build_item(self, response, gold, candidate_chunks, scrape_stage):
-        best = candidate_chunks[0] if candidate_chunks else None
-
-        page_text = self.clean_text(" ".join(response.css("body ::text").getall()))
-        page_score = self.score_text(page_text)
-        keyword_hits = self.keyword_hits(page_text)
-
-        item = VenueScrapeItem()
-        item["venue_id"] = gold.get("venue_id", "")
-        item["venue_name"] = gold.get("venue_name", "")
-        item["source_url"] = gold.get("Source URL", "")
-        item["business_type_gold"] = gold.get("Business Type", "")
-        # item["experience_category_gold"] = gold.get("Experience Category", "")
-        item["incentive_category_gold"] = gold.get("Incentive Category", "")
-        item["teaser_gold"] = gold.get("Incentive Teaser", "")
-        item["description_gold"] = gold.get("Full Incentive Description", "")
-
-        item["scraped_url"] = response.url
-        item["final_url"] = response.url
-        item["status"] = response.status
-        item["scrape_stage"] = scrape_stage
-
-        item["page_title"] = self.clean_text(" ".join(response.css("title::text").getall()))
-        item["text_chars"] = len(page_text)
-        item["incentive_score"] = page_score
-        item["keyword_hits"] = ", ".join(keyword_hits)
-
-        item["top_candidate_text"] = best["text"] if best else ""
-        item["top_candidate_score"] = best["score"] if best else 0
-        item["all_candidate_chunks"] = " ||| ".join(
-            c["text"] for c in candidate_chunks[:8]
-        )
-
-        item["failure_type"] = self.classify_failure(response, page_text, candidate_chunks)
-        item["notes"] = ""
-
-        return item
-
-    def classify_failure(self, response, page_text, candidate_chunks):
-        if response.status in {401, 403, 429}:
-            return "blocked_or_forbidden"
-
-        if response.status >= 400:
-            return "request_fail"
-
-        title = self.clean_text(" ".join(response.css("title::text").getall())).lower()
-        lower_text = page_text.lower()
-
-        stale_markers = [
-            "domain for sale",
-            "buy this domain",
-            "parkingcrew",
-            "sedo",
-            "this domain is parked",
-        ]
-
-        if any(marker in title or marker in lower_text for marker in stale_markers):
-            return "wrong_or_stale_url"
-
-        if len(page_text) < 300:
-            return "js_required_or_low_text"
-
-        if not candidate_chunks:
-            return "no_incentive_keywords"
-
-        return "ok"
-
-    def errback_venue(self, failure):
-        request = failure.request
-        gold = request.meta.get("gold_record", {})
-
-        item = VenueScrapeItem()
-        item["venue_id"] = gold.get("venue_id", "")
-        item["venue_name"] = gold.get("venue_name", "")
-        item["source_url"] = gold.get("Source URL", "")
-        item["business_type_gold"] = gold.get("Business Type", "")
-        # item["experience_category_gold"] = gold.get("Experience Category", "")
-        item["incentive_category_gold"] = gold.get("Incentive Category", "")
-        item["teaser_gold"] = gold.get("Incentive Teaser", "")
-        item["description_gold"] = gold.get("Full Incentive Description", "")
-
-        item["scraped_url"] = request.url
-        item["final_url"] = ""
-        item["status"] = ""
-        item["scrape_stage"] = request.meta.get("stage", "unknown")
-
-        item["page_title"] = ""
-        item["text_chars"] = 0
-        item["incentive_score"] = 0
-        item["keyword_hits"] = ""
-
-        item["top_candidate_text"] = ""
-        item["top_candidate_score"] = 0
-        item["all_candidate_chunks"] = ""
-
-        # item["failure_type"] = "request_fail"
-        item["failure_type"] = self.classify_exception_failure(failure)
-        item["notes"] = repr(failure.value)
-
-        yield item
-
-    def clean_text(self, text):
-        text = text or ""
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
-
-    def score_text(self, text):
-        lower = text.lower()
-        score = 0
-
-        for kw in INCENTIVE_KEYWORDS:
-            if kw in lower:
-                score += 1
-
-        if re.search(r"\$\s?\d+", text):
-            score += 2
-
-        if re.search(r"\d+\s?%", text):
-            score += 2
-
-        if re.search(r"\b(mon|tue|wed|thu|fri|sat|sun|daily|weekly)\b", text, re.I):
-            score += 1
-
-        return score
-
-    def keyword_hits(self, text):
-        lower = text.lower()
-        return sorted({kw for kw in INCENTIVE_KEYWORDS if kw in lower})
-
-    def score_link_text(self, text):
-        lower = text.lower()
-        return sum(1 for kw in LINK_KEYWORDS if kw in lower)
-
-    def is_noise(self, text):
-        lower = text.lower()
-
-        if any(phrase in lower for phrase in NOISE_PHRASES):
+                if clicked:
+                    break
+            else:
+                raise LookupError("No cookie banner matched.")
             return True
 
-        words = lower.split()
-        if len(words) > 8 and len(set(words)) / max(len(words), 1) < 0.35:
+        except LookupError as exc:
+            self.logger.info("%s", exc)
+            return False
+    
+    async def handle_location(self, page):
+        # Find a searchbar
+        try:
+            search_box = page.get_by_placeholder(
+                re.compile("Search", re.I)
+            ).first
+
+            await page.wait_for_timeout(250)
+
+            await search_box.fill("Los Angeles, CA")
+            await page.wait_for_timeout(250)
+            await search_box.press("ArrowDown")
+            await search_box.press("Enter")
+            await page.wait_for_timeout(250)
+            select_button = page.get_by_role(
+                "button",
+                name=re.compile("SELECT", re.I)
+            ).first
+            await select_button.wait_for(timeout=1000)
+            await select_button.click(timeout=1000)
+
+            self.logger.info("Location selected successfully")
             return True
 
-        return False
-
-    def is_menu_block(self, text):
-        lower = text.lower()
-        dollar_count = text.count("$")
-
-        if dollar_count < 2:
+        except PlaywrightTimeoutError:
+            self.logger.info("Input location interaction was unavailable.")
             return False
 
-        has_food_word = any(word in lower for word in MENU_FOOD_WORDS)
-        has_deal_word = any(
-            word in lower
-            for word in [
-                "deal",
-                "special",
-                "discount",
-                "happy hour",
-                "half off",
-                "free",
-                "promo",
-                "offer",
-            ]
+        except Exception: 
+            self.logger.exception("Unexpected error while location selecting.")
+            return False
+
+    async def safe_click(self, locator, timeout=3000, label="element"):
+        try:
+            await locator.click(timeout=timeout)
+            self.logger.info("Clicked %s.", label)
+            return True
+        except PlaywrightTimeoutError:
+            self.logger.info("Did not find %s. Continuing.", label)
+            return False
+        
+    async def extract_offer_candidates(self, page):
+        """
+        Find promotional headings, then select the smallest useful ancestor
+        containing both the heading and its supporting descriptive text.
+        """
+        results = []
+
+        for keyword_name, pattern in self.offer_patterns.items():
+            # Start from headings rather than every element containing the text.
+            matches = page.locator(
+                "h1, h2, h3, h4, h5, h6"
+            ).filter(
+                has_text=pattern
+            )
+
+            count = await matches.count()
+
+            self.logger.info("Found %d heading matches for keyword=%s", count, keyword_name)
+
+            for index in range(min(count, 50)):
+                heading = matches.nth(index)
+
+                try:
+                    candidate = await heading.evaluate(
+                        """
+                        heading => {
+                            const normalize = value =>
+                                (value || "")
+                                    .replace(/\\u00a0/g, " ")
+                                    .replace(/\\s+/g, " ")
+                                    .trim();
+
+                            const wordCount = value => {
+                                const normalized = normalize(value);
+
+                                if (!normalized) {
+                                    return 0;
+                                }
+
+                                return normalized
+                                    .split(/\\s+/)
+                                    .filter(Boolean)
+                                    .length;
+                            };
+
+                            const headingText = normalize(heading.innerText);
+                            const headingWords = wordCount(headingText);
+
+                            const candidates = [];
+
+                            let current = heading;
+
+                            for (
+                                let level = 0;
+                                current && level < 7;
+                                level += 1
+                            ) {
+                                const text = normalize(current.innerText);
+                                const words = wordCount(text);
+                                const tag = current.tagName;
+
+                                if (!text || words === 0 || words > 180) {
+                                    current = current.parentElement;
+                                    continue;
+                                }
+
+                                /*
+                                * Supporting text means that this ancestor adds
+                                * useful text beyond the heading itself.
+                                */
+                                const addedWords = words - headingWords;
+                                const hasSupportingText = addedWords >= 3;
+
+                                /*
+                                * Count descendants that commonly represent
+                                * headings or descriptive text.
+                                */
+                                const headingCount = current.querySelectorAll(
+                                    "h1, h2, h3, h4, h5, h6"
+                                ).length;
+
+                                const descriptionCount =
+                                    current.querySelectorAll(
+                                        "p, span"
+                                    ).length;
+
+                                let score = 0;
+
+                                /*
+                                * We want a container that adds a description.
+                                */
+                                if (hasSupportingText) {
+                                    score += 50;
+                                }
+
+                                /*
+                                * Prefer common content-container elements.
+                                */
+                                if (
+                                    tag === "DIV" ||
+                                    tag === "SECTION" ||
+                                    tag === "ARTICLE"
+                                ) {
+                                    score += 25;
+                                }
+
+                                /*
+                                * A heading plus nearby text is a strong sign
+                                * that this is the intended content card.
+                                */
+                                if (
+                                    headingCount >= 1 &&
+                                    descriptionCount >= 1
+                                ) {
+                                    score += 25;
+                                }
+
+                                /*
+                                * Prefer smaller, more local containers.
+                                */
+                                score -= level * 3;
+                                score -= Math.max(0, words - 40) * 0.5;
+
+                                /*
+                                * Penalize interactive and navigational wrappers.
+                                * Their text may be correct, but they usually
+                                * describe UI structure rather than the offer.
+                                */
+                                if (tag === "BUTTON") {
+                                    score -= 30;
+                                }
+
+                                if (tag === "LI") {
+                                    score -= 25;
+                                }
+
+                                if (
+                                    tag === "UL" ||
+                                    tag === "OL" ||
+                                    tag === "NAV"
+                                ) {
+                                    score -= 50;
+                                }
+
+                                candidates.push({
+                                    text,
+                                    words,
+                                    added_words: addedWords,
+                                    tag,
+                                    class_name:
+                                        typeof current.className === "string" ? current.className
+                                            : "",
+                                    dom_level: level,
+                                    score,
+                                    has_supporting_text: hasSupportingText,
+                                    heading_count: headingCount,
+                                    description_count: descriptionCount
+                                });
+
+                                current = current.parentElement;
+                            }
+
+                            /*
+                            * Only consider nodes that include useful supporting
+                            * text. Sort by score and return the best one.
+                            */
+                            const useful = candidates.filter(
+                                candidate =>
+                                    candidate.has_supporting_text
+                            );
+
+                            useful.sort(
+                                (a, b) => b.score - a.score
+                            );
+
+                            return useful.length > 0 ? useful[0] : null;
+                        }
+                        """
+                    )
+
+                except Exception as exc:
+                    self.logger.warning("Candidate evaluation failed: %s", exc)
+                    continue
+
+                if not candidate:
+                    continue
+
+                text = self.clean_text(candidate["text"])
+
+                if not text:
+                    continue
+
+                results.append({
+                    "matched_keyword": keyword_name,
+                    "raw_text": text,
+                    "word_count": candidate["words"],
+                    "added_word_count": candidate["added_words"],
+                    "tag": candidate["tag"],
+                    "class_name": candidate["class_name"],
+                    "dom_level": candidate["dom_level"],
+                    "candidate_score": candidate["score"],
+                    "heading_count": candidate["heading_count"],
+                    "description_count":
+                        candidate["description_count"],
+                    "extraction_method":
+                        "heading_context_container",
+                })
+
+        return self.deduplicate_candidates(results)
+
+    def deduplicate_candidates(self, candidates):
+        """
+        First remove exact duplicates, then remove larger blocks that add
+        little information beyond an already-retained smaller block.
+        """
+        exact = {}
+
+        for candidate in candidates:
+            normalized = self.normalize_for_comparison(candidate["raw_text"])
+
+            key = (
+                candidate["matched_keyword"],
+                normalized,
+            )
+
+            previous = exact.get(key)
+
+            if (previous is None or candidate["word_count"] < previous["word_count"]):
+                exact[key] = candidate
+
+        ordered = sorted(
+            exact.values(),
+            key=lambda row: row["word_count"],
         )
 
-        return has_food_word and not has_deal_word
+        retained = []
+
+        for candidate in ordered:
+            candidate_text = self.normalize_for_comparison(candidate["raw_text"])
+
+            redundant = False
+
+            for existing in retained:
+                existing_text = self.normalize_for_comparison(existing["raw_text"])
+
+                if (existing["matched_keyword"] == candidate["matched_keyword"]
+                    and existing_text in candidate_text
+                    and candidate["word_count"] > existing["word_count"] * 2):
+                    redundant = True
+                    break
+
+            if not redundant:
+                retained.append(candidate)
+
+        return retained    
+
+    def clean_text(self, text):
+        if not text:
+            return ""
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
     
-    def classify_exception_failure(self, failure):
-        text = repr(failure.value).lower()
+    def normalize_for_comparison(self, text):
+        text = self.clean_text(text).lower()
+        text = re.sub(r"[^\w$%:/.-]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
 
-        if "dns lookup failed" in text or "cannotresolvehost" in text:
-            return "dns_unresolved"
-
-        if "timeout" in text:
-            return "timeout"
-
-        if "connection refused" in text:
-            return "connection_refused"
-
-        if "certificate" in text or "ssl" in text:
-            return "ssl_error"
-
-        return "request_fail"
-"""
+    async def errback_close_page(self, failure):
+        page = failure.request.meta.get("playwright_page")
+        if page is not None and not page.is_closed():
+            await page.close()
