@@ -266,12 +266,121 @@ class VenueScraperSpider(scrapy.Spider):
         except PlaywrightTimeoutError:
             self.logger.info("Did not find %s. Continuing.", label)
             return False
-        
     async def extract_offer_candidates(self, page):
         """
-        Find promotional headings, then select the smallest useful ancestor
-        containing both the heading and its supporting descriptive text.
+        Extract minimal or near-minimal semantic blocks instead of every
+        ancestor div containing a matching descendant.
         """
+        results = []
+
+        for keyword_name, pattern in self.offer_patterns.items():
+            matches = page.get_by_text(pattern)
+
+            count = await matches.count()
+
+            for index in range(min(count, 50)):
+                match = matches.nth(index)
+
+                try:
+                    candidate = await match.evaluate("""
+                        node => {
+                            const preferredTags = new Set([
+                                "ARTICLE",
+                                "SECTION",
+                                "SPAN",
+                                "H1",
+                                "H2",
+                                "H3",
+                                "H4",
+                                "H5",
+                                "H6",
+                            ]);
+
+                            const maxWords = 180;
+                            const minWords = 2;
+
+                            const normalize = value =>
+                                (value || "")
+                                    .replace(/\\u00a0/g, " ")
+                                    .replace(/\\s+/g, " ")
+                                    .trim();
+
+                            const wordCount = value =>
+                                normalize(value)
+                                    .split(/\\s+/)
+                                    .filter(Boolean)
+                                    .length;
+
+                            let current = node;
+                            let best = null;
+
+                            for (let level = 0;
+                                 current && level < 7;
+                                 level += 1) {
+
+                                const text = normalize(current.innerText);
+                                const words = wordCount(text);
+
+                                if (
+                                    words >= minWords &&
+                                    words <= maxWords
+                                ) {
+                                    best = {
+                                        text,
+                                        words,
+                                        tag: current.tagName,
+                                        class_name:
+                                            typeof current.className === "string"
+                                                ? current.className
+                                                : "",
+                                        dom_level: level,
+                                        semantic:
+                                            preferredTags.has(current.tagName)
+                                    };
+
+                                    /*
+                                     * Prefer the first useful semantic
+                                     * container. Otherwise continue upward
+                                     * briefly to collect nearby details.
+                                     */
+                                    if (best.semantic && words >= 5) {
+                                        break;
+                                    }
+                                }
+
+                                current = current.parentElement;
+                            }
+
+                            return best;
+                        }
+                    """)
+
+                except Exception:
+                    continue
+
+                if not candidate:
+                    continue
+
+                text = self.clean_text(candidate["text"])
+
+                if not text:
+                    continue
+
+                results.append({
+                    "matched_keyword": keyword_name,
+                    "raw_text": text,
+                    "word_count": candidate["words"],
+                    "tag": candidate["tag"],
+                    "class_name": candidate["class_name"],
+                    "dom_level": candidate["dom_level"],
+                    "extraction_method": "keyword_ancestor_search",
+                })
+
+        return self.deduplicate_candidates(results)
+
+     
+    """
+    async def extract_offer_candidates(self, page):
         results = []
 
         for keyword_name, pattern in self.offer_patterns.items():
@@ -291,7 +400,6 @@ class VenueScraperSpider(scrapy.Spider):
 
                 try:
                     candidate = await heading.evaluate(
-                        """
                         heading => {
                             const normalize = value =>
                                 (value || "")
@@ -444,7 +552,6 @@ class VenueScraperSpider(scrapy.Spider):
 
                             return useful.length > 0 ? useful[0] : null;
                         }
-                        """
                     )
 
                 except Exception as exc:
@@ -476,6 +583,7 @@ class VenueScraperSpider(scrapy.Spider):
                 })
 
         return self.deduplicate_candidates(results)
+    """
 
     def deduplicate_candidates(self, candidates):
         """
