@@ -113,6 +113,20 @@ def _is_membership(teaser: str) -> bool:
     return any(p in lower for p in _MEMBERSHIP_PHRASES)
 
 
+def ollama_reachable(timeout: float = 3.0) -> bool:
+    """Check whether Ollama responds on any candidate URL, caching the working one."""
+    global _active_url
+    for url in [u for u in _OLLAMA_URLS if u]:
+        tags_url = url.replace("/api/generate", "/api/tags")
+        try:
+            if requests.get(tags_url, timeout=timeout).status_code == 200:
+                _active_url = url
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _call_ollama(prompt: str, timeout: float = 30.0) -> str:
     global _active_url
     urls = [_active_url] if _active_url else [u for u in _OLLAMA_URLS if u]

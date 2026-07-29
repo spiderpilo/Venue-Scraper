@@ -1,7 +1,16 @@
-# Define your item pipelines here
+# ─────────────────────────────────────────────────────────────────────────────
+# pipelines.py — Post-processing for scraped items
 #
-# Don't forget to add your pipeline to the ITEM_PIPELINES setting
-# See: https://docs.scrapy.org/en/latest/topics/item-pipeline.html
+# In Scrapy, every item yielded by a spider passes through the pipeline
+# before being saved. Pipelines are where you clean, validate, enrich,
+# or store items (e.g. write to a database).
+#
+# Pipeline classes are activated in settings.py under ITEM_PIPELINES.
+# The number (e.g. 300) is the execution order — lower runs first.
+#
+# Currently: the active pipeline is a passthrough (returns items unchanged).
+# The commented-out version below it showed how to strip extra whitespace.
+# ─────────────────────────────────────────────────────────────────────────────
 """
 class VenueScraperPipeline:
     def process_item(self, item, spider=None):

@@ -22,7 +22,7 @@ from datetime import datetime
 # sys.path.insert(0, os.path.dirname(__file__))
 
 from src.scraper import scrape_venue_pages, fallback_search, fallback_search_pricing, scrape_wayback
-from src.llama_extractor import extract_incentive_with_llama
+from src.llama_extractor import extract_incentive_with_llama, ollama_reachable
 from src.model_extractor import extract_value
 from src.field_enricher import enrich_fields
 from src.schedule_formatter import build_incentives
@@ -243,6 +243,14 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
 
 def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, workers=5):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    if not ollama_reachable():
+        print("\nERROR: Can't reach Ollama — every venue would silently come back 'No Incentive'.")
+        print("  1. Make sure Ollama is installed and running: https://ollama.com/download")
+        print("  2. Make sure the models are pulled: ollama pull llama3.1:8b && ollama pull llama3.2:3b")
+        print("  3. Make sure this container was started with: --add-host=host.docker.internal:host-gateway")
+        print("See README.md 'Install Ollama and pull the models' for details.\n")
+        return []
 
     out_file = output or OUTPUT_FILE
     out_path = os.path.join(OUTPUT_DIR, out_file)

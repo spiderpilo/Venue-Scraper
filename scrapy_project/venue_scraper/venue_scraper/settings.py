@@ -1,8 +1,19 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# settings.py — Global Scrapy configuration
+#
+# These are the DEFAULT settings for the whole project. Individual spiders
+# can override any of these via their own `custom_settings` dict.
+# ─────────────────────────────────────────────────────────────────────────────
+
 BOT_NAME = "venue_scraper"
 
+# Tell Scrapy where to find spider files
 SPIDER_MODULES = ["venue_scraper.spiders"]
 NEWSPIDER_MODULE = "venue_scraper.spiders"
 
+# ── Output ────────────────────────────────────────────────────────────────────
+# FEEDS tells Scrapy where to save the yielded items.
+# Here it writes to a JSON file. "overwrite: True" clears the file each run.
 FEEDS = {
     "data/scrapy-playwright/scaper_output.json" : { # Save scraped items in multiple numbered files
         "format": "json",
@@ -13,28 +24,44 @@ FEEDS = {
 
 FEED_EXPORT_INDENT = 4 # pretty-print the JSON using 4 spaces per nesting level
 
-USER_AGENT = None 
+# Don't send a User-Agent header (Playwright handles browser identity instead)
+USER_AGENT = None
 
+# ── Concurrency & politeness ──────────────────────────────────────────────────
+# Only 2 requests running at the same time across the whole crawler
 CONCURRENT_REQUESTS = 2
+# Never more than 1 request at a time to the same domain — avoids getting blocked
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
+# Wait 3 seconds between requests to the same site (polite crawling)
 DOWNLOAD_DELAY = 3.0
+# Randomize the delay (between 1.5s–6s) so it looks more like a real user
 RANDOMIZE_DOWNLOAD_DELAY = True
 
 COOKIES_ENABLED = True
 
+# None = let Playwright manage headers; setting this to None avoids conflicts
 PLAYWRIGHT_PROCESS_REQUEST_HEADERS = None
 
+# ── AutoThrottle ──────────────────────────────────────────────────────────────
+# AutoThrottle automatically adjusts the download delay based on server response
+# times. If the server is slow, it backs off; if it's fast, it speeds up slightly.
 AUTOTHROTTLE_ENABLED = True
-AUTOTHROTTLE_START_DELAY = 3.0
-AUTOTHROTTLE_MAX_DELAY = 30.0
-AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5
-AUTOTHROTTLE_DEBUG = False
+AUTOTHROTTLE_START_DELAY = 3.0       # Start at 3s between requests
+AUTOTHROTTLE_MAX_DELAY = 30.0        # Never wait more than 30s
+AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5  # Target 0.5 parallel requests per domain
+AUTOTHROTTLE_DEBUG = False           # Set True to see throttle adjustments in logs
 
+# ── HTTP Cache (disabled) ─────────────────────────────────────────────────────
+# Caching would save pages locally so re-runs don't re-fetch the same pages.
+# Disabled here because we want fresh data every run (venue offers change).
 HTTPCACHE_ENABLED = False
-HTTPCACHE_EXPIRATION_SECS = 60 * 60 * 24
+HTTPCACHE_EXPIRATION_SECS = 60 * 60 * 24  # If enabled: cache expires after 24h
 HTTPCACHE_DIR = "httpcache"
 HTTPCACHE_IGNORE_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408, 429]
 
+# ── Retries ───────────────────────────────────────────────────────────────────
+# If a request fails with one of these HTTP error codes, retry it once.
+# Covers server errors and rate-limiting (429 = Too Many Requests).
 RETRY_ENABLED = True
 RETRY_TIMES = 1
 RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408, 429]
