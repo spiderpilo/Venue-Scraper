@@ -113,18 +113,23 @@ def _is_membership(teaser: str) -> bool:
     return any(p in lower for p in _MEMBERSHIP_PHRASES)
 
 
-def ollama_reachable(timeout: float = 3.0) -> bool:
-    """Check whether Ollama responds on any candidate URL, caching the working one."""
+def missing_ollama_models(required, timeout: float = 3.0):
+    """
+    Check which of `required` model names are missing from the reachable Ollama
+    instance. Returns None if Ollama itself couldn't be reached on any candidate URL.
+    """
     global _active_url
     for url in [u for u in _OLLAMA_URLS if u]:
         tags_url = url.replace("/api/generate", "/api/tags")
         try:
-            if requests.get(tags_url, timeout=timeout).status_code == 200:
+            r = requests.get(tags_url, timeout=timeout)
+            if r.status_code == 200:
                 _active_url = url
-                return True
+                available = {m.get("name", "") for m in r.json().get("models", [])}
+                return [m for m in required if m not in available]
         except Exception:
             continue
-    return False
+    return None
 
 
 def _call_ollama(prompt: str, timeout: float = 30.0) -> str:

@@ -38,6 +38,8 @@ ollama pull llama3.2:3b
 
 Leave the Ollama app/service running in the background — the Docker container reaches it over the host network, which is why every `docker run` command below includes `--add-host=host.docker.internal:host-gateway` (required on Linux; harmless on Mac/Windows).
 
+`run_model_pipeline.py` checks this automatically before doing any scraping: if Ollama isn't reachable, or is reachable but missing `llama3.1:8b`/`llama3.2:3b`, it fails immediately with a message telling you which of the two is wrong. If you don't see that check fail, the model is loading correctly — if every venue in your output still comes back `No Incentive` with `model_confidence: 0.0` and `extraction_source: "no_result"` in `_meta`, something's still off; re-check steps 2 and the `--add-host` flag.
+
 ### 3. Create your `.env` file
 
 Create a file called `.env` in the project root and add:
