@@ -287,14 +287,10 @@ class VenueScraperSpider(scrapy.Spider):
                             const preferredTags = new Set([
                                 "ARTICLE",
                                 "SECTION",
-                                "SPAN",
-                                "H1",
-                                "H2",
-                                "H3",
-                                "H4",
-                                "H5",
-                                "H6",
                             ]);
+
+                            const isHeaing = /^H[1-6]$/.test(current.tagName);
+                            const isSpan = current.tagName === "SPAN";
 
                             const maxWords = 180;
                             const minWords = 2;
@@ -343,9 +339,9 @@ class VenueScraperSpider(scrapy.Spider):
                                      * container. Otherwise continue upward
                                      * briefly to collect nearby details.
                                      */
-                                    if (best.semantic && words >= 5) {
-                                        break;
-                                    }
+                                    // if (best.semantic && words >= 5 && !isHeading && !isSpan) {
+                                    //     break;
+                                    // }
                                 }
 
                                 current = current.parentElement;
