@@ -1,3 +1,12 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# keyword_bank.py — Shared keyword lists used across the scraping pipeline
+#
+# These are NOT used directly inside the spider yet — they're a reference bank
+# your teammate is building out for future filtering and scoring logic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# INCENTIVE_KEYWORDS: words/phrases that signal a promotional offer exists.
+# If any of these appear in scraped text, the content is worth examining further.
 INCENTIVE_KEYWORDS = [
     "happy hour",
     "discount",
@@ -60,7 +69,10 @@ INCENTIVE_KEYWORDS = [
     "$",
 ]
 
-
+# LINK_KEYWORDS: URL path fragments that suggest a page is worth crawling.
+# e.g. a link to "/specials" or "/happy-hour" is more likely to have offer
+# content than a link to "/about". Used for link prioritization when crawling
+# multi-page sites.
 LINK_KEYWORDS = [
     "happy-hour",
     "happyhour",
@@ -94,7 +106,9 @@ LINK_KEYWORDS = [
     "birthday",
 ]
 
-
+# NOISE_PHRASES: phrases that look like content but aren't useful offer data.
+# If a scraped block only contains these, it should be discarded.
+# Mostly footer/nav boilerplate that appears on every page of a site.
 NOISE_PHRASES = [
     "privacy policy",
     "terms of use",
@@ -112,7 +126,9 @@ NOISE_PHRASES = [
     "order now",
 ]
 
-
+# MENU_FOOD_WORDS: food item words that suggest a block is menu content, not
+# an offer. A block mentioning "burger", "taco", "salad" is probably a menu
+# description — useful for filtering out menu noise from offer candidates.
 MENU_FOOD_WORDS = [
     "burger",
     "pizza",

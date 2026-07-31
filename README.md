@@ -7,10 +7,9 @@ Scrapes venue websites and automatically detects promotional incentives (happy h
 ## What it does
 
 1. Visits each venue's website and looks for incentive-related content
-2. If the site is blocked or JS-heavy, falls back to Wayback Machine or a Google search
-3. Runs the content through an ML model to classify the incentive
-4. If the model isn't confident enough, asks Claude API to decide
-5. Outputs a structured JSON file with all fields filled in, including a backend-ready `incentives` schedule block
+2. If the site is blocked or JS-heavy, falls back to Wayback Machine or a Serper search
+3. Runs the content through a local Llama model (via Ollama) to classify the incentive
+4. Outputs a structured JSON file with all fields filled in, including a backend-ready `incentives` schedule block
 
 ---
 
@@ -18,6 +17,7 @@ Scrapes venue websites and automatically detects promotional incentives (happy h
 
 ### Requirements
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- [Ollama](https://ollama.com/download) installed and running on your machine (the pipeline calls it from inside the container — see step 2)
 - A `.env` file in the project root with your API keys (see below)
 
 ### 1. Clone the repo
@@ -27,7 +27,20 @@ git clone https://github.com/spiderpilo/Venue-Scraper.git
 cd Venue-Scraper
 ```
 
-### 2. Create your `.env` file
+### 2. Install Ollama and pull the models
+
+The pipeline runs its classification and text-rewriting locally through [Ollama](https://ollama.com/download), not through a paid API. Install it, then pull the two models this project uses:
+
+```bash
+ollama pull llama3.1:8b
+ollama pull llama3.2:3b
+```
+
+Leave the Ollama app/service running in the background — the Docker container reaches it over the host network, which is why every `docker run` command below includes `--add-host=host.docker.internal:host-gateway` (required on Linux; harmless on Mac/Windows).
+
+`run_model_pipeline.py` checks this automatically before doing any scraping: if Ollama isn't reachable, or is reachable but missing `llama3.1:8b`/`llama3.2:3b`, it fails immediately with a message telling you which of the two is wrong. If you don't see that check fail, the model is loading correctly — if every venue in your output still comes back `No Incentive` with `model_confidence: 0.0` and `extraction_source: "no_result"` in `_meta`, something's still off; re-check steps 2 and the `--add-host` flag.
+
+### 3. Create your `.env` file
 
 Create a file called `.env` in the project root and add:
 
@@ -37,8 +50,10 @@ SERPER_API_KEY=your_key_here
 ```
 
 > ⚠️ Never commit this file. It's already in `.gitignore`.
+>
+> `SERPER_API_KEY` is used as a scraping fallback (when a venue's site can't be reached directly or Wayback has nothing) and for pricing lookups when a detected incentive has no listed price — get a free key at [serper.dev](https://serper.dev). `ANTHROPIC_API_KEY` is not called by the default pipeline (`run_model_pipeline.py`) today; it's only used by `src/relabel_pipeline.py` for model retraining. Both keys can be placeholder values if you're not using those paths, but the `.env` file must exist.
 
-### 3. Build the Docker image
+### 4. Build the Docker image
 
 ```bash
 docker build -t venue-scraper .
@@ -53,13 +68,13 @@ This takes 5–10 minutes the first time. After that it's instant.
 ### Test run (10 venues)
 
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
 ```
 
 ### Full run (all 1060 venues)
 
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 1060 --output my_run.json
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 1060 --output my_run.json
 ```
 
 Output is saved to `data/model_output/` on your local machine.
@@ -79,7 +94,7 @@ If you have a new list of venues to run:
 3. Run it by pointing `--source` at your file:
 
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/YOUR_FILE.json --limit 10
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/YOUR_FILE.json --limit 10
 ```
 
 Start with `--limit 10` to verify it's working before doing the full run.
@@ -90,33 +105,33 @@ Start with `--limit 10` to verify it's working before doing the full run.
 
 ### Run a small test batch
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --limit 10
 ```
 
 ### Run specific venues by row number
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --indices 0,5,12,20
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --indices 0,5,12,20
 ```
 
 ### Run from a specific row onwards
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --offset 100 --limit 50
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --source data/processed/All_Venues_w_Incentives.json --offset 100 --limit 50
 ```
 
 ### See what sentences are being scraped (before the model sees them)
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --source data/processed/All_Venues_w_Incentives.json --limit 10
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --source data/processed/All_Venues_w_Incentives.json --limit 10
 ```
 Saves a JSON file to `data/inspect/` showing every sentence pulled from each venue.
 
 ### Inspect a single venue URL directly
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --url https://example.com --name "Venue Name"
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python scrape_inspect.py --url https://example.com --name "Venue Name"
 ```
 
 ### Retrain the ML model
 ```bash
-docker run --rm --env-file .env -v ${PWD}/data:/app/data venue-scraper python src/trainmodel.py
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python src/trainmodel.py
 ```
 
 ---
@@ -181,10 +196,12 @@ The `incentives` block is what the backend consumes. `type` is one of:
 venue-scraper/
 ├── src/
 │   ├── scraper.py              # Scrapes websites (Playwright + Wayback + Serper)
-│   ├── model_extractor.py      # ML model that classifies incentives
+│   ├── llama_extractor.py      # Local Llama (Ollama) model that classifies incentives
+│   ├── teaser_rewriter.py      # Local Llama (Ollama) model that shortens long teasers
+│   ├── model_extractor.py      # Legacy ML model + value-rescue helper; also has the Claude fallback path (unused by default pipeline)
 │   ├── field_enricher.py       # Fills in structured output fields
 │   ├── schedule_formatter.py   # Builds the backend incentives block
-│   ├── claude_extractor.py     # Claude API fallback
+│   ├── claude_extractor.py     # Claude API extractor, used for model retraining (relabel_pipeline.py), not the default run
 │   ├── relabel_pipeline.py     # Re-labels data for model retraining
 │   └── trainmodel.py           # Trains the ML model
 ├── run_model_pipeline.py       # Main script — runs the full pipeline
