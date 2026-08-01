@@ -1,6 +1,8 @@
-// ======================================
-//       LAZY DOG & HARD HOUSE STRINGS
-// ======================================
+//& OBJECTIVE: compare output using raw JavaScript vs. Scrapy.
+
+//& Lazy Dog Target DOM:
+// This DOM consists of a "red herring" and the actual content that we
+// actually want to extract.
 const lazyDogHtml = `
 <ul class="sc-dXsUDb">
     <li class="sc-fUuaMo kOihPn">
@@ -25,7 +27,8 @@ const lazyDogHtml = `
     </li>
 </ul>
 `;
-
+//& Yard House DOM:
+// Basic testing, easiest to decipher, had no issues in Scrapy.
 const yardHouseHtml = `
 <section class="happy-hour-section">
     <article class="offer-card">
@@ -39,9 +42,7 @@ const yardHouseHtml = `
 </section>
 `;
 
-// ======================================
-//              DOM METHODS
-// ======================================
+//& DOM Methods:
 /*
     document.querySelector("h4");
     document.querySelector("span");
@@ -53,43 +54,16 @@ const yardHouseHtml = `
     parentElement.className
 */
 
+//& Basic Test:
 const {JSDOM} = require("jsdom");
 
 const dom = new JSDOM(lazyDogHtml);
 const document = dom.window.document;
 
 const heading = document.querySelector("h4");
-// console.log(heading.innerHTML);
+// console.log(heading.innerHTML); // Testing DOM Methods
 
-// ======================================
-//             ARROW FUNCTIONS 
-// ======================================
-function normalize(value) {
-    return (value || "")
-        .replace(/\u00a0/g, " ")
-        // .replace(/\s+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-} 
-
-const wordCount = value => {
-    const normalized = normalize(value);
-
-    if(!normalized) {
-        return 0;
-    }
-
-    return normalized
-        .split(/\s+/)
-        .filter(Boolean)
-        .length;
-};
-
-const getText = elements => 
-    elements 
-        ? normalize(elements.innerText ?? elements.textContent) 
-        : "";
-
+//& Conver to Function:
 function findPreferredAncestor(node) {
     const preferredTags = new Set([
         "ARTICLE",
@@ -102,10 +76,28 @@ function findPreferredAncestor(node) {
     const maxWords = 180;
     const minWords = 2;
 
+    const normalized = value =>
+        (value || "")
+            .replace(/\\u00a0/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    
+    const wordCount = value =>
+        normalized(value)
+            .split(/\s+/)
+            .filter(Boolean)
+            .length;
+
+    const getText = elements => 
+        elements 
+        ? normalized(elements.innerText ?? elements.textContent) 
+        : "";
+
     let current = node;
     let best = null;
 
     for(let level = 0; current && level < 7; level += 1) {
+        // const text = getText(current);
         const text = getText(current);
         const words = wordCount(text);
         // console.log({
@@ -138,7 +130,9 @@ function findPreferredAncestor(node) {
     return best;
 }
 
+//& 1st Test:
 const lazyDogHeading_h4 = document.querySelector("h4");
+//& 2nd Test: 
 const lazyDogHeading_class_select = document.querySelector(".sc-TOgAA");
 
 const result_1 = findPreferredAncestor(lazyDogHeading_h4);
