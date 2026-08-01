@@ -1,14 +1,16 @@
-/*
-    TODO: Re-write Yard House candidates function 
-    - from arrow function -> actual function.
-    - Test with both lazyDogHtml & yardHouseHtml.
-    - Make one adjustment to function.
-*/
-
 // ======================================
 //       LAZY DOG & HARD HOUSE STRINGS
 // ======================================
 const lazyDogHtml = `
+<ul class="sc-dXsUDb">
+    <li class="sc-fUuaMo kOihPn">
+       <button class="sc-kmiJQj bzKQEm" aria-label="Happy Hour + Late Night" data-uw-rm-empty-ctrl="">
+        <span class="sc-TOgAA fKvike">Happy 
+            Hour + Late Night
+        </span>
+       </button> 
+    </li>
+</ul>
 <ul>
     <li class="sc-dXsUDb gSkHhS">
         <button type="button">
@@ -51,21 +53,13 @@ const yardHouseHtml = `
     parentElement.className
 */
 
-// ======================================
-//           METHODS TO LOOK INTO 
-// ======================================
-/* 
-    .className
-    .tagName
-*/
-
 const {JSDOM} = require("jsdom");
 
 const dom = new JSDOM(lazyDogHtml);
 const document = dom.window.document;
 
 const heading = document.querySelector("h4");
-console.log(heading.innerHTML);
+// console.log(heading.innerHTML);
 
 // ======================================
 //             ARROW FUNCTIONS 
@@ -73,6 +67,7 @@ console.log(heading.innerHTML);
 function normalize(value) {
     return (value || "")
         .replace(/\u00a0/g, " ")
+        // .replace(/\s+/g, " ")
         .replace(/\s+/g, " ")
         .trim();
 } 
@@ -91,7 +86,9 @@ const wordCount = value => {
 };
 
 const getText = elements => 
-    elements ? normalize(elements.textContent) : "";
+    elements 
+        ? normalize(elements.innerText ?? elements.textContent) 
+        : "";
 
 function findPreferredAncestor(node) {
     const preferredTags = new Set([
@@ -104,7 +101,6 @@ function findPreferredAncestor(node) {
 
     const maxWords = 180;
     const minWords = 2;
-    console.log("MOW");
 
     let current = node;
     let best = null;
@@ -112,13 +108,13 @@ function findPreferredAncestor(node) {
     for(let level = 0; current && level < 7; level += 1) {
         const text = getText(current);
         const words = wordCount(text);
-        console.log({
-            level,
-            tag: current.tagName,
-            className: current.className,
-            words,
-            text
-        })
+        // console.log({
+        //     level,
+        //     tag: current.tagName,
+        //     className: current.className,
+        //     words,
+        //     text
+        // })
 
         if(words >= minWords && words <= maxWords) {
             best = {
@@ -126,10 +122,15 @@ function findPreferredAncestor(node) {
                 words,
                 tag: current.tagName,
                 class_name:
-                    typeof current.className === "string" ? current.clsasName : "",
+                    typeof current.className === "string" 
+                        ? current.className 
+                        : "",
                 dom_level: level,
-                semantic:
-                    preferredTags.has(current.tagName)
+                semantic: preferredTags.has(current.tagName)
+            };
+
+            if(best.semantic && words >=5) {
+                break;
             }
         }
         current = current.parentElement; 
@@ -137,8 +138,11 @@ function findPreferredAncestor(node) {
     return best;
 }
 
-const lazyDogHeading = document.querySelector("h4");
+const lazyDogHeading_h4 = document.querySelector("h4");
+const lazyDogHeading_class_select = document.querySelector(".sc-TOgAA");
 
-const result = findPreferredAncestor(lazyDogHeading);
+const result_1 = findPreferredAncestor(lazyDogHeading_h4);
+const result_2 = findPreferredAncestor(lazyDogHeading_class_select);
 
-console.log(result);
+console.log(result_1);
+console.log(result_2);
