@@ -376,10 +376,13 @@ class VenueScraperSpider(scrapy.Spider):
                             const preferredTags = new Set([
                                 "ARTICLE",
                                 "SECTION",
+                                "LI",
+                                "TR",
+                                "FIGURE"
                             ]);
 
-                            const isHeaing = /^H[1-6]$/.test(current.tagName);
-                            const isSpan = current.tagName === "SPAN";
+                            // const isHeaing = /^H[1-6]$/.test(current.tagName);
+                            // const isSpan = current.tagName === "SPAN";
 
                             const maxWords = 180;
                             const minWords = 2;
@@ -428,9 +431,9 @@ class VenueScraperSpider(scrapy.Spider):
                                      * container. Otherwise continue upward
                                      * briefly to collect nearby details.
                                      */
-                                    // if (best.semantic && words >= 5 && !isHeading && !isSpan) {
-                                    //     break;
-                                    // }
+                                    if (best.semantic && words >= 5) {
+                                        break;
+                                    }
                                 }
 
                                 current = current.parentElement;
@@ -461,7 +464,8 @@ class VenueScraperSpider(scrapy.Spider):
                     "extraction_method": "keyword_ancestor_search",
                 })
 
-        return self.deduplicate_candidates(results)
+        # return self.deduplicate_candidates(results)
+        return results
 
      
     """
