@@ -142,80 +142,50 @@ class VenueScraperSpider(scrapy.Spider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        load_dotenv()
-        # API_KEY = os.getenv("LOVABLE_API_URL")
-        # API_KEY = os.getenv("LOVABLE_SCRAPER_API_KEY")
+        load_dotenv() # Reads key-value pairs from .env & loads to OS environment variables.
 
         self.lovable_api_url = os.environ["LOVABLE_API_URL"]
         self.lovable_api_key = os.environ["LOVABLE_SCRAPER_API_KEY"]
         self.api_page_size = 5
-        # Start at the homepage for testing
-        # Start with 1 URL link
-        # self.start_url = "https://www.yardhouse.com/happy-hour"
-        # self.start_url = "https://m.yardhouse.com/happy-hour"
-        # self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
-        # self.start_url = "https://www.novaoc.com/"
-        """
-        self.start_urls = ["https://www.novaoc.com/",
-                "https://www.yardhouse.com/home",
-                "https://lazydogrestaurants.com/",
-                "https://www.tavern101agoura.com/",
-                "https://www.2jslounge.com/",
-                "http://www.romancucinafullerton.com/",
-                "https://romeocucina.com/",
-                "https://www.riptidesushi.com/",
-                "https://www.saltcreekgrilleoc.com/",
-                "https://www.ranchocapwinery.com/",
-                "https://www.luckystrikeent.com/",
-                "https://m.seasons52.com/home"]
-        """
+
 
     async def start(self):
         # Entry point — Scrapy calls this to generate the first request(s).
         # `yield` sends the request into Scrapy's queue; Scrapy calls
         # parse_page() when the page loads.
-        #& For Testing One URL
-        """
-        yield self.make_playwright_request(
-            url=self.start_url,
-            depth=0,          # depth=0 means this is the seed/starting page
-            source_url=None,  # No referrer for the first page
-            discovery_reason=["seed"],
-        )
-        """
-        #& For Testing Multipl URLs 
-        """
-        for url in self.start_urls:
-            yield self.make_playwright_request(
-                url=url,
-                depth=0,
-                source_url=None,
-                discovery_reason=["seed"],
-            )
-        """
         #& For Testing Lovable API Call:
-        url = f"{self.lovable_api_url}?limit={self.api_page_size}"
-        self.logger.info(f"OUTPUT URL: {url}")
-        """
+        
         yield scrapy.Request(
-            url=url,
+            url=f"{self.lovable_api_url}?limit=5",
             headers={
                 "Authorization": f"Bearer {self.lovable_api_key}",
                 "Accept": "application/json",
             },
-            callback=self.parse_lovable_venues,
-            errback=self.errback_lovable_api,
-
-            # IMPORTANT:
-            # This API request should NOT use Playwright.
-            meta={
-                "playwright": False,
-            },
-
+            callback=self.parse_venues,
             dont_filter=True,
         )
-        """
+    
+    async def parse_venues(self, response):
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError:
+            self.logger.error(
+                "Lovable returned invalid JSON. status=%s body=%s",
+                response.status,
+                response.text[:500],
+            )
+            return
+
+        venues = data.get("venues", [])
+        if(len(venues) == 0):
+            self.logger.info("===============NO VENUES RECEIVED===============")
+            return
+        self.logger.info("Received %d venues from Lovable.", len(venues))
+
+        for venue in venues:
+            self.logger.info(
+                f"ID: {venue.get('website')}"
+            )
 
     def parse_lovable_venues(self, response):
         """
