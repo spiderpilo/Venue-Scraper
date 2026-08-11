@@ -1,5 +1,14 @@
+# New additions for Lovable API Call:
+import json
+import os
+from collections import defaultdict
+
+from dotenv import load_dotenv
+import os
+
 import re
 from collections import defaultdict
+
 from urllib.parse import urljoin, urlparse, urldefrag
 
 import scrapy
@@ -134,16 +143,40 @@ class VenueScraperSpider(scrapy.Spider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        load_dotenv()
+        # API_KEY = os.getenv("LOVABLE_API_URL")
+        # API_KEY = os.getenv("LOVABLE_SCRAPER_API_KEY")
+
+        self.lovable_api_url = os.environ["LOVABLE_API_URL"]
+        self.lovable_api_key = os.environ["LOVABLE_SCRAPER_API_KEY"]
+        self.api_page_size = 5
         # Start at the homepage for testing
         # Start with 1 URL link
         # self.start_url = "https://www.yardhouse.com/happy-hour"
         # self.start_url = "https://m.yardhouse.com/happy-hour"
-        self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
+        # self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
+        # self.start_url = "https://www.novaoc.com/"
+        """
+        self.start_urls = ["https://www.novaoc.com/",
+                "https://www.yardhouse.com/home",
+                "https://lazydogrestaurants.com/",
+                "https://www.tavern101agoura.com/",
+                "https://www.2jslounge.com/",
+                "http://www.romancucinafullerton.com/",
+                "https://romeocucina.com/",
+                "https://www.riptidesushi.com/",
+                "https://www.saltcreekgrilleoc.com/",
+                "https://www.ranchocapwinery.com/",
+                "https://www.luckystrikeent.com/",
+                "https://m.seasons52.com/home"]
+        """
 
     async def start(self):
         # Entry point — Scrapy calls this to generate the first request(s).
         # `yield` sends the request into Scrapy's queue; Scrapy calls
         # parse_page() when the page loads.
+        #& For Testing One URL
+        """
         yield self.make_playwright_request(
             url=self.start_url,
             depth=0,          # depth=0 means this is the seed/starting page
@@ -151,15 +184,109 @@ class VenueScraperSpider(scrapy.Spider):
             discovery_reason=["seed"],
         )
         """
-        Uncomment later for multiply links:
+        #& For Testing Multipl URLs 
+        """
         for url in self.start_urls:
-            yield scrapy.make_playwright_request(
+            yield self.make_playwright_request(
                 url=url,
                 depth=0,
                 source_url=None,
                 discovery_reason=["seed"],
             )
         """
+        #& For Testing Lovable API Call:
+        url = f"{self.lovable_api_url}?limit={self.api_page_size}"
+        self.logger.info(f"OUTPUT URL: {url}")
+        """
+        yield scrapy.Request(
+            url=url,
+            headers={
+                "Authorization": f"Bearer {self.lovable_api_key}",
+                "Accept": "application/json",
+            },
+            callback=self.parse_lovable_venues,
+            errback=self.errback_lovable_api,
+
+            # IMPORTANT:
+            # This API request should NOT use Playwright.
+            meta={
+                "playwright": False,
+            },
+
+            dont_filter=True,
+        )
+        """
+
+    def parse_lovable_venues(self, response):
+        """
+        Parse one page returned by the Lovable Edge Function.
+
+        Each venue website becomes a normal Playwright crawl request.
+        """
+
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError:
+            self.logger.error(
+                "Lovable returned invalid JSON. status=%s body=%s",
+                response.status,
+                response.text[:500],
+            )
+            return
+
+        rows = data.get("rows", [])
+
+        self.logger.info("Received %d venues from Lovable.", len(rows))
+
+        for venue in rows:
+            venue_id = venue.get("id")
+            venue_name = venue.get("name")
+            website = venue.get("website")
+
+            if not website:
+                continue
+
+            self.logger.info(
+                "Queueing venue: id=%s name=%s website=%s",
+                venue_id,
+                venue_name,
+                website,
+            )
+
+            yield self.make_playwright_request(
+                url=website,
+                depth=0,
+                source_url=None,
+                discovery_reason=["lovable_database"],
+                venue_id=venue_id,
+                venue_name=venue_name,
+            )
+
+        # Fetch the next Lovable API page if one exists.
+        if data.get("has_more"):
+            next_cursor = data.get("next_cursor")
+
+            if next_cursor:
+                next_url = (
+                    f"{self.lovable_api_url}"
+                    f"?limit={self.api_page_size}"
+                    f"&cursor={next_cursor}"
+                )
+
+                yield scrapy.Request(
+                    url=next_url,
+                    headers={
+                        "Authorization":
+                            f"Bearer {self.lovable_api_key}",
+                        "Accept": "application/json",
+                    },
+                    callback=self.parse_lovable_venues,
+                    errback=self.errback_lovable_api,
+                    meta={
+                        "playwright": False,
+                    },
+                    dont_filter=True,
+                )
 
     def make_playwright_request(self, url, depth, source_url, discovery_reason):
         # Builds a Scrapy Request object wired to open in a Playwright browser.
@@ -184,6 +311,7 @@ class VenueScraperSpider(scrapy.Spider):
                 },
         )
 
+    """
     async def parse_page(self, response):
         # This is the main callback — it runs once per loaded page.
         # `response` is Scrapy's response object; we also get the live
@@ -249,21 +377,40 @@ class VenueScraperSpider(scrapy.Spider):
             for candidate in candidates:
                 yield {
                     "record_type": "offer_candidate",
-                    # "venue": self.identify_venue(final_url),
+
+                    "venue_id": response.meta.get("venue_id"),
+                    "venue_name": response.meta.get("venue_name"),
+
                     "page_url": final_url,
                     "requested_url": response.url,
                     "source_url": response.meta.get("source_url"),
+
                     "page_title": title,
                     "crawl_depth": depth,
+
                     "discovery_reason":
                         response.meta.get("discovery_reason", []),
-                    **candidate,   # Spread all fields from the candidate dict in
-                }
 
+                    **candidate,
+                }
+            # for candidate in candidates:
+            #     yield {
+            #         "record_type": "offer_candidate",
+            #         # "venue": self.identify_venue(final_url),
+            #         "page_url": final_url,
+            #         "requested_url": response.url,
+            #         "source_url": response.meta.get("source_url"),
+            #         "page_title": title,
+            #         "crawl_depth": depth,
+            #         "discovery_reason":
+            #             response.meta.get("discovery_reason", []),
+            #         **candidate,   # Spread all fields from the candidate dict in
+            #     }
         finally:
             # Always close the browser tab, even if something threw an error.
             # Without this, tabs accumulate and memory usage grows unbounded.
             await page.close()
+        """
 
     async def handle_cookie_banner(self, page):
         # Many venue sites show a GDPR/cookie consent popup on first load.
@@ -381,9 +528,6 @@ class VenueScraperSpider(scrapy.Spider):
                                 "FIGURE"
                             ]);
 
-                            // const isHeaing = /^H[1-6]$/.test(current.tagName);
-                            // const isSpan = current.tagName === "SPAN";
-
                             const maxWords = 180;
                             const minWords = 2;
 
@@ -466,218 +610,6 @@ class VenueScraperSpider(scrapy.Spider):
 
         # return self.deduplicate_candidates(results)
         return results
-
-     
-    """
-    async def extract_offer_candidates(self, page):
-        results = []
-
-        for keyword_name, pattern in self.offer_patterns.items():
-            # Start from headings rather than every element containing the text.
-            matches = page.locator(
-                "h1, h2, h3, h4, h5, h6"
-            ).filter(
-                has_text=pattern
-            )
-
-            count = await matches.count()
-
-            self.logger.info("Found %d heading matches for keyword=%s", count, keyword_name)
-
-            # Cap at 50 matches per keyword to avoid runaway loops on noisy pages
-            for index in range(min(count, 50)):
-                heading = matches.nth(index)
-
-                try:
-                    # `evaluate()` runs a JavaScript function directly inside
-                    # the browser, with the heading DOM element passed in.
-                    # The JS walks up the DOM and returns the best ancestor block.
-                    candidate = await heading.evaluate(
-                        heading => {
-                            // Normalize whitespace: collapse multiple spaces/newlines,
-                            // replace non-breaking spaces ( ) with regular spaces
-                            const normalize = value =>
-                                (value || "")
-                                    .replace(/\\u00a0/g, " ")
-                                    .replace(/\\s+/g, " ")
-                                    .trim();
-
-                            // Count words in a string after normalizing it
-                            const wordCount = value => {
-                                const normalized = normalize(value);
-
-                                if (!normalized) {
-                                    return 0;
-                                }
-
-                                return normalized
-                                    .split(/\\s+/)
-                                    .filter(Boolean)
-                                    .length;
-                            };
-
-                            const headingText = normalize(heading.innerText);
-                            const headingWords = wordCount(headingText);
-
-                            const candidates = [];  // Will hold all ancestor blocks we examine
-
-                            let current = heading;
-
-                            // Walk up the DOM tree up to 7 levels above the heading.
-                            // level=0 is the heading itself; level=6 is 6 parents up.
-                            for (
-                                let level = 0;
-                                current && level < 7;
-                                level += 1
-                            ) {
-                                const text = normalize(current.innerText);
-                                const words = wordCount(text);
-                                const tag = current.tagName;
-
-                                // Skip nodes that are empty or unreasonably large
-                                // (>180 words = probably a whole page section, too noisy)
-                                if (!text || words === 0 || words > 180) {
-                                    current = current.parentElement;
-                                    continue;
-                                }
-
-                                /*
-                                * Supporting text means that this ancestor adds
-                                * useful text beyond the heading itself.
-                                * e.g. heading = "Happy Hour" (2 words),
-                                * ancestor = "Happy Hour Mon-Fri 3-6pm $5 wells" (8 words)
-                                * → addedWords = 6, hasSupportingText = true
-                                */
-                                const addedWords = words - headingWords;
-                                const hasSupportingText = addedWords >= 3;
-
-                                /*
-                                * Count how many heading and paragraph/span elements
-                                * are nested inside this ancestor.
-                                * We use these counts in scoring below.
-                                */
-                                const headingCount = current.querySelectorAll(
-                                    "h1, h2, h3, h4, h5, h6"
-                                ).length;
-
-                                const descriptionCount =
-                                    current.querySelectorAll(
-                                        "p, span"
-                                    ).length;
-
-                                // ── Scoring ─────────────────────────────────
-                                // Higher score = better candidate block.
-                                let score = 0;
-
-                                // +50 if this ancestor adds descriptive text beyond the heading
-                                if (hasSupportingText) {
-                                    score += 50;
-                                }
-
-                                // +25 for semantic content containers (not layout or nav elements)
-                                if (
-                                    tag === "DIV" ||
-                                    tag === "SECTION" ||
-                                    tag === "ARTICLE"
-                                ) {
-                                    score += 25;
-                                }
-
-                                // +25 if this block looks like a "card" (has a heading + body text)
-                                if (
-                                    headingCount >= 1 &&
-                                    descriptionCount >= 1
-                                ) {
-                                    score += 25;
-                                }
-
-                                // Penalize ancestors that are farther up the tree —
-                                // we want the smallest block that still has useful content
-                                score -= level * 3;
-                                // Penalize very long blocks — they're probably page-level wrappers
-                                score -= Math.max(0, words - 40) * 0.5;
-
-                                // Penalize interactive/navigational elements —
-                                // their text describes UI structure, not offer content
-                                if (tag === "BUTTON") {
-                                    score -= 30;
-                                }
-
-                                if (tag === "LI") {
-                                    score -= 25;
-                                }
-
-                                if (
-                                    tag === "UL" ||
-                                    tag === "OL" ||
-                                    tag === "NAV"
-                                ) {
-                                    score -= 50;
-                                }
-
-                                // Add this ancestor to our candidates list with its score
-                                candidates.push({
-                                    text,
-                                    words,
-                                    added_words: addedWords,
-                                    tag,
-                                    class_name:
-                                        typeof current.className === "string" ? current.className
-                                            : "",
-                                    dom_level: level,
-                                    score,
-                                    has_supporting_text: hasSupportingText,
-                                    heading_count: headingCount,
-                                    description_count: descriptionCount
-                                });
-
-                                current = current.parentElement;  // Move one level up
-                            }
-
-                            // Filter to only ancestors that add useful text,
-                            // then sort by score descending and return the best one
-                            const useful = candidates.filter(
-                                candidate =>
-                                    candidate.has_supporting_text
-                            );
-
-                            useful.sort(
-                                (a, b) => b.score - a.score
-                            );
-
-                            return useful.length > 0 ? useful[0] : null;
-                        }
-                    )
-
-                except Exception as exc:
-                    self.logger.warning("Candidate evaluation failed: %s", exc)
-                    continue
-
-                if not candidate:
-                    continue
-
-                text = self.clean_text(candidate["text"])
-
-                if not text:
-                    continue
-
-                # Build the output record for this candidate block
-                results.append({
-                    "matched_keyword": keyword_name,        # Which pattern triggered this (e.g. "happy_hour")
-                    "raw_text": text,                       # The full visible text of the block
-                    "word_count": candidate["words"],       # Total words in the block
-                    "added_word_count": candidate["added_words"],  # Words beyond the heading itself
-                    "tag": candidate["tag"],                # HTML tag of the block (DIV, SECTION, etc.)
-                    "class_name": candidate["class_name"],  # CSS class — useful for debugging
-                    "dom_level": candidate["dom_level"],    # How many levels above the heading
-                    "candidate_score": candidate["score"],  # The score used to rank this block
-                    "heading_count": candidate["heading_count"],
-                    "description_count": candidate["description_count"],
-                    "extraction_method": "heading_context_container",
-                })
-
-        return self.deduplicate_candidates(results)
-    """
 
     def deduplicate_candidates(self, candidates):
         """
@@ -762,3 +694,9 @@ class VenueScraperSpider(scrapy.Spider):
         page = failure.request.meta.get("playwright_page")
         if page is not None and not page.is_closed():
             await page.close()
+
+    def errback_lovable_api(self, failure):
+        self.logger.error(
+            "Lovable API request failed: %s",
+            failure,
+        )

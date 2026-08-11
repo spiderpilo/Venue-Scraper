@@ -100,6 +100,8 @@ function findPreferredAncestor(node) {
         // const text = getText(current);
         const text = getText(current);
         const words = wordCount(text);
+        //& Print out contents after each iteration.
+        // Comment this out to reduce clutter. Uncomment for testing.
         // console.log({
         //     level,
         //     tag: current.tagName,
@@ -121,9 +123,9 @@ function findPreferredAncestor(node) {
                 semantic: preferredTags.has(current.tagName)
             };
 
-            if(best.semantic && words >=5) {
-                break;
-            }
+            // if(best.semantic && words >=5) {
+            //     break;
+            // }
         }
         current = current.parentElement; 
     }
