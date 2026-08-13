@@ -134,32 +134,33 @@ class VenueScraperSpider(scrapy.Spider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Start at the homepage for testing
-        # Start with 1 URL link
-        # self.start_url = "https://www.yardhouse.com/happy-hour"
-        # self.start_url = "https://m.yardhouse.com/happy-hour"
-        self.start_url = "https://orders.lazydogrestaurants.com/menu?_gl=1*15zth8s*_gcl_au*MTAxNDc5NDA4NC4xNzgxNTQxNzk5"
+        # 10 real venue sites, pulled from venues the model pipeline already
+        # categorized as "Happy Hour" — good odds of matching this spider's
+        # offer_patterns.
+        self.start_urls = [
+            "http://www.gaslamp.org/",
+            "https://www.thegeezer.com/",
+            "https://www.georgesatthecove.com/",
+            "https://www.bigbearmountainresort.com/things-to-do/dining",
+            "https://gloriascocinamx.com/",
+            "https://www.goathilltavern.com/",
+            "http://goldcountrylanes.com/",
+            "http://www.goldenacorncasino.com/",
+            "http://goosetown-lounge.edan.io/",
+            "https://grandolebbq.com/",
+        ]
 
     async def start(self):
         # Entry point — Scrapy calls this to generate the first request(s).
         # `yield` sends the request into Scrapy's queue; Scrapy calls
-        # parse_page() when the page loads.
-        yield self.make_playwright_request(
-            url=self.start_url,
-            depth=0,          # depth=0 means this is the seed/starting page
-            source_url=None,  # No referrer for the first page
-            discovery_reason=["seed"],
-        )
-        """
-        Uncomment later for multiply links:
+        # parse_page() when each page loads.
         for url in self.start_urls:
-            yield scrapy.make_playwright_request(
+            yield self.make_playwright_request(
                 url=url,
-                depth=0,
-                source_url=None,
+                depth=0,          # depth=0 means this is a seed/starting page
+                source_url=None,  # No referrer for seed pages
                 discovery_reason=["seed"],
             )
-        """
 
     def make_playwright_request(self, url, depth, source_url, discovery_reason):
         # Builds a Scrapy Request object wired to open in a Playwright browser.

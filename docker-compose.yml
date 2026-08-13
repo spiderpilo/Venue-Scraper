@@ -1,0 +1,25 @@
+# Local MySQL for development — lets the app pull pipeline output without
+# each teammate installing MySQL natively. Not intended as the production DB;
+# point DB_HOST at a real server there instead (see README).
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-devroot}
+      MYSQL_DATABASE: ${DB_NAME:-venue_scraper}
+      MYSQL_USER: ${DB_USER:-venue_scraper}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-devpassword}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:-devroot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql_data:

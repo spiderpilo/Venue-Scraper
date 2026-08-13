@@ -81,6 +81,62 @@ Output is saved to `data/model_output/` on your local machine.
 
 ---
 
+## Loading into MySQL
+
+The app pulls venue/incentive data from MySQL, not directly from the pipeline's
+JSON output. `db/schema.sql` defines two tables:
+
+- `venues` — one row per venue (name, address, business type, source URL,
+  plus pipeline QA fields: `scrape_source`, `model_confidence`, `extraction_source`)
+- `venue_incentives` — one row per detected incentive, FK'd to `venues`.
+  Empty for venues where `Incentive Category` is "No Incentive" (matches the
+  JSON output's `incentives: []`). The `schedule` column stores the same
+  nested JSON documented above (`days`/`periods`/`timezone` for recurring
+  incentives, `start_date`/`end_date` for date-bounded ones).
+
+### 1. Start MySQL
+
+```bash
+docker compose up -d mysql
+```
+
+This starts a local MySQL 8 container and runs `db/schema.sql` automatically
+on first boot (only on first boot — if you change the schema later, either
+drop the `mysql_data` volume and let it re-init, or apply the change with
+`ALTER TABLE` / re-run the `.sql` file by hand). Default credentials are in
+`.env` (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) and match
+`docker-compose.yml`'s defaults, so no extra setup is needed for local dev.
+
+This is a local dev database, not the production one — once the app team
+has a real MySQL server, point `DB_HOST`/`DB_PORT`/etc. at that instead.
+
+### 2. Load pipeline output
+
+```bash
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env \
+  -e DB_HOST=host.docker.internal -v ${PWD}/data:/app/data venue-scraper \
+  python load_to_mysql.py data/model_output/my_run.json
+```
+
+Accepts multiple files or a glob (`data/model_output/*.json`). Loading is
+idempotent and safe to re-run — each venue is upserted on `venue_id`, and
+that venue's incentive rows are replaced with whatever's in the file you just
+loaded, so re-loading the same or an overlapping export won't create
+duplicates.
+
+`DB_HOST=host.docker.internal` + `--add-host` is required because the
+pipeline container needs to reach MySQL running on your host machine — same
+reason the model pipeline commands above need it for Ollama. If you're
+running `load_to_mysql.py` directly on the host (outside Docker, e.g. in a
+local venv with `pip install -r requirements.txt`), use `DB_HOST=127.0.0.1`
+instead and drop `--add-host`.
+
+The script checks MySQL is reachable before doing anything else — if it
+isn't, it fails immediately with which of the two setups above you're likely
+missing, rather than a raw connection traceback.
+
+---
+
 ## Using a different gold standard file
 
 If you have a new list of venues to run:
@@ -205,7 +261,11 @@ venue-scraper/
 │   ├── relabel_pipeline.py     # Re-labels data for model retraining
 │   └── trainmodel.py           # Trains the ML model
 ├── run_model_pipeline.py       # Main script — runs the full pipeline
+├── load_to_mysql.py            # Loads pipeline output JSON into MySQL
 ├── scrape_inspect.py           # Debug tool — shows scraped sentences as JSON
+├── db/
+│   └── schema.sql              # MySQL schema (venues + venue_incentives)
+├── docker-compose.yml          # Local MySQL for development
 ├── Dockerfile
 ├── data/
 │   ├── processed/              # Input files go here (gitignored)
