@@ -102,15 +102,68 @@ _MEMBERSHIP_PHRASES = {
     "members only", "member exclusive", "membership plan",
     "membership fee", "monthly membership", "annual membership",
     "membership required", "membership includes", "member benefits",
-    "join as a member", "member pricing", "loyalty program",
-    "subscribe to our", "join our mailing", "sign up for our",
-    "newsletter", "rewards program", "points program",
+    "member benefit", "join as a member", "member pricing",
+    "loyalty program", "loyalty points", "subscribe to our",
+    "subscribe for", "join our mailing", "sign up for", "sign-up for",
+    "newsletter", "rewards program", "points program", "rewards points",
+    "reward points", "rewards app", "app rewards", "vip club",
+    "earn points", "collect points", "redeem points", "cash back points",
 }
 
+# Matches "reward"/"rewards"/"rewarded" etc. as a whole word — bare
+# substring matching would be fine here (unlike "point", nothing in real
+# venue text collides with "reward").
+_REWARD_RE = re.compile(r"\breward(s|ed|ing)?\b", re.IGNORECASE)
 
-def _is_membership(teaser: str) -> bool:
-    lower = teaser.lower()
-    return any(p in lower for p in _MEMBERSHIP_PHRASES)
+# "member(s)" preceded by one of these means "a person belonging to a
+# group" (service members, family members, guest list members), not "a
+# paying loyalty-club member" — don't flag those as membership pitches.
+_MEMBER_EXCLUDE_QUALIFIERS = {
+    "service", "military", "family", "team", "staff", "crew",
+    "community", "board", "committee", "faculty", "congregation",
+    "cast", "band",
+}
+
+# Bare "point"/"points" collides with real words ("appointment", "Point
+# Loma"), so only flag it alongside a loyalty-points-scheme signal word —
+# e.g. "earn double points", "75 base points for a gift", "points per $1
+# spent". A sports score ("21+ point wins") won't have any of these nearby.
+_POINTS_RE = re.compile(r"\bpoints?\b", re.IGNORECASE)
+_POINTS_CONTEXT_WORDS = (
+    "earn", "collect", "redeem", "spent", "toward", "club", "gift",
+    "cash back", "loyalty", "bonus", "double", "base",
+)
+
+
+def _has_club_member_mention(text: str) -> bool:
+    words = re.findall(r"[a-z]+", text.lower())
+    for i, w in enumerate(words):
+        if w not in ("member", "members"):
+            continue
+        prev = words[i - 1] if i > 0 else ""
+        prev2 = " ".join(words[max(0, i - 2):i])
+        if prev in _MEMBER_EXCLUDE_QUALIFIERS or prev2 == "guest list":
+            continue
+        return True
+    return False
+
+
+def _has_loyalty_points_mention(text: str) -> bool:
+    if not _POINTS_RE.search(text):
+        return False
+    return any(w in text for w in _POINTS_CONTEXT_WORDS)
+
+
+def _is_membership(*texts: str) -> bool:
+    combined = " ".join(t for t in texts if t)
+    lower = combined.lower()
+    if any(p in lower for p in _MEMBERSHIP_PHRASES):
+        return True
+    if _REWARD_RE.search(lower):
+        return True
+    if _has_loyalty_points_mention(lower):
+        return True
+    return _has_club_member_mention(lower)
 
 
 def missing_ollama_models(required, timeout: float = 3.0):
@@ -253,7 +306,7 @@ def extract_incentive_with_llama(text: str, business_type: str = "", timing_metr
     timing = parsed.get("timing", "Unknown") or "Unknown"
     value  = parsed.get("value", "Unknown") or "Unknown"
 
-    if _is_membership(teaser):
+    if _is_membership(teaser, timing, value):
         return _empty()
 
     motivator = _derive_motivator(category, teaser + " " + timing)
