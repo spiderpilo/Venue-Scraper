@@ -135,6 +135,81 @@ The script checks MySQL is reachable before doing anything else — if it
 isn't, it fails immediately with which of the two setups above you're likely
 missing, rather than a raw connection traceback.
 
+### 3. Production: DigitalOcean Managed MySQL
+
+The team's shared/production data lives on DigitalOcean's Managed MySQL, not
+the local docker-compose instance above (that stays useful for individual
+dev/testing).
+
+**One-time setup (whoever creates the cluster):**
+
+1. In the DigitalOcean dashboard: Databases → Create Database Cluster → MySQL.
+2. Once it's up, open the cluster's **Connection Details** panel for the
+   host, port, username, password, and database name.
+3. Download the CA certificate from the same panel (**Download CA
+   Certificate**) and save it somewhere on your machine, e.g. `~/.mysql/do-ca-certificate.crt`.
+4. Under **Trusted Sources**, add whichever machines will run
+   `load_to_mysql.py` (your IP, a teammate's IP, or a CI runner) — DO
+   rejects connections from anywhere not on this list.
+5. Connect with a MySQL client using those details and run `db/schema.sql`
+   once to create the tables (DO's managed clusters don't support the
+   `docker-entrypoint-initdb.d` auto-init trick the local container uses).
+
+**Everyone loading data**, add to `.env`:
+
+```
+DB_HOST=<from the DO connection details panel>
+DB_PORT=25060
+DB_NAME=venue_scraper
+DB_USER=<from DO>
+DB_PASSWORD=<from DO>
+DB_SSL_CA=/path/to/do-ca-certificate.crt
+```
+
+Then load exactly as before, but simpler — this is a real internet host, so
+skip `--add-host`/`host.docker.internal` and mount the CA cert into the
+container:
+
+```bash
+docker run --rm --env-file .env \
+  -v ${PWD}/data:/app/data \
+  -v ~/.mysql/do-ca-certificate.crt:/app/ca.crt:ro \
+  -e DB_SSL_CA=/app/ca.crt \
+  venue-scraper python load_to_mysql.py data/model_output/my_run.json
+```
+
+If the connection fails, the error message adapts based on `DB_HOST` and
+points at the DO-specific things to check (Trusted Sources, the CA cert
+path, credentials) instead of the local Docker networking advice.
+
+---
+
+## Pulling venues from the Lovable API
+
+Instead of manually dropping an export file into `data/processed/` and
+renaming its columns by hand, the pipeline can fetch venues live from the
+Lovable API (a Supabase Edge Function that returns the venue directory, with
+Google Place IDs, websites, categories, etc.) and map its fields
+automatically (`website` → `Source URL`, `category` → `Business Type`).
+
+Add to `.env`:
+```
+LOVABLE_API_URL=
+LOVABLE_SCRAPER_API_KEY=
+```
+
+Then run with `--from-lovable` instead of `--source`:
+
+```bash
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --from-lovable --limit 10
+```
+
+`--offset`/`--limit`/`--indices` still work the same way, slicing the venues
+after they're fetched. For incremental pulls (only venues updated since a
+given date), add `--lovable-from-date 2026-08-01` — note this passes the
+date straight through to the API's own `from_date` filter, which hasn't been
+verified against the live API the way pagination has.
+
 ---
 
 ## Using a different gold standard file
@@ -252,6 +327,7 @@ The `incentives` block is what the backend consumes. `type` is one of:
 venue-scraper/
 ├── src/
 │   ├── scraper.py              # Scrapes websites (Playwright + Wayback + Serper)
+│   ├── lovable_client.py       # Fetches + paginates venues from the Lovable API (--from-lovable)
 │   ├── llama_extractor.py      # Local Llama (Ollama) model that classifies incentives
 │   ├── teaser_rewriter.py      # Local Llama (Ollama) model that shortens long teasers
 │   ├── model_extractor.py      # Legacy ML model + value-rescue helper; also has the Claude fallback path (unused by default pipeline)

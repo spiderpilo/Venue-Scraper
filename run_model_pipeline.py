@@ -7,6 +7,8 @@ Usage:
     python run_model_pipeline.py --offset 5 --limit 5
     python run_model_pipeline.py --limit 100 --output model_venues_2026-05-17.json
     python run_model_pipeline.py --workers 8           # parallel scraping (default: 5)
+    python run_model_pipeline.py --from-lovable --limit 10             # pull venues live from the Lovable API
+    python run_model_pipeline.py --from-lovable --lovable-from-date 2026-08-01  # only venues updated since this date
 """
 
 import argparse
@@ -27,6 +29,7 @@ from src.model_extractor import extract_value
 from src.field_enricher import enrich_fields
 from src.schedule_formatter import build_incentives
 from src.teaser_rewriter import rewrite_teaser, OLLAMA_MODEL as TEASER_MODEL
+from src.lovable_client import fetch_lovable_venues
 
 OUTPUT_DIR  = "data/model_output"
 OUTPUT_FILE = "model_venues.json"
@@ -241,7 +244,8 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
-def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, workers=5):
+def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, workers=5,
+        from_lovable=False, lovable_from_date=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     missing = missing_ollama_models([EXTRACTOR_MODEL, TEASER_MODEL])
@@ -261,12 +265,27 @@ def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, 
     out_file = output or OUTPUT_FILE
     out_path = os.path.join(OUTPUT_DIR, out_file)
 
-    if not os.path.exists(source):
-        print(f"\nERROR: Source file not found: {source}")
-        print("Pass your file with --source data/processed/YOUR_FILE.json\n")
-        return []
+    if from_lovable:
+        # Only cap the fetch for the plain offset/limit test-run pattern —
+        # not a full run (limit=None) or --indices, which could reference
+        # positions beyond a naive offset+limit window.
+        max_venues = (offset + limit) if (indices is None and limit is not None) else None
 
-    all_venues = load_all_venues(source)
+        print("\nFetching venues from the Lovable API...")
+        try:
+            all_venues = fetch_lovable_venues(from_date=lovable_from_date, max_venues=max_venues)
+        except RuntimeError as exc:
+            print(f"\nERROR: {exc}\n")
+            return []
+        except Exception as exc:
+            print(f"\nERROR: Lovable API request failed: {exc}\n")
+            return []
+    else:
+        if not os.path.exists(source):
+            print(f"\nERROR: Source file not found: {source}")
+            print("Pass your file with --source data/processed/YOUR_FILE.json\n")
+            return []
+        all_venues = load_all_venues(source)
 
     if indices is not None:
         venues = [all_venues[i] for i in indices if i < len(all_venues)]
@@ -341,6 +360,11 @@ if __name__ == "__main__":
                         help="Output filename (default: model_venues_YYYY-MM-DD.json)")
     parser.add_argument("--workers", type=int, default=5,
                         help="Number of parallel scraping workers (default: 5)")
+    parser.add_argument("--from-lovable", action="store_true",
+                        help="Fetch venues from the Lovable API instead of --source. "
+                             "Requires LOVABLE_API_URL and LOVABLE_SCRAPER_API_KEY in .env")
+    parser.add_argument("--lovable-from-date", type=str, default=None,
+                        help="With --from-lovable, only fetch venues updated since this date (YYYY-MM-DD)")
     args = parser.parse_args()
 
     idx = [int(x) for x in args.indices.split(",")] if args.indices else None
@@ -352,4 +376,5 @@ if __name__ == "__main__":
         out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_off{args.offset:04d}.json"
 
     run(indices=idx, offset=args.offset, limit=args.limit, source=args.source,
-        output=out, workers=args.workers)
+        output=out, workers=args.workers, from_lovable=args.from_lovable,
+        lovable_from_date=args.lovable_from_date)

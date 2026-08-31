@@ -1,17 +1,24 @@
+import json
+import os
 import re
-from collections import defaultdict
-from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.parse import urlencode
 
 import scrapy
+from dotenv import load_dotenv
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HOW THIS SPIDER WORKS (high level)
 #
-# This is a Scrapy spider that uses Playwright (a real browser) to visit venue
-# websites and hunt for promotional offers like "Happy Hour" or "Half Off".
+# Venue discovery now comes from two external APIs instead of a hardcoded URL
+# list:
+#   - Lovable API: the venue directory (id, name, website) this spider crawls
+#   - Supabase (public_events_v1): live-music event listings — currently just
+#     logged (see parse_public_events); nothing consumes this data yet because
+#     we don't know what should happen with an event record that has no
+#     venue website field to scrape. Needs input from whoever owns that table.
 #
-# The core flow per page:
+# For each venue website the Lovable API returns, the core flow is unchanged:
 #   1. Open the URL in a real Chromium browser (via Playwright)
 #   2. Dismiss any cookie banners so they don't block the content
 #   3. Fill in a location search box if one appears (targets LA venues)
@@ -131,38 +138,189 @@ class VenueScraperSpider(scrapy.Spider):
     # Minimum score a link must have (from link_term_weights) to be followed
     min_link_score = 40
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, limit=None, from_date=None, **kwargs):
         super().__init__(*args, **kwargs)
+        load_dotenv()  # Reads key-value pairs from .env & loads to OS environment variables.
 
-        # 10 real venue sites, pulled from venues the model pipeline already
-        # categorized as "Happy Hour" — good odds of matching this spider's
-        # offer_patterns.
-        self.start_urls = [
-            "http://www.gaslamp.org/",
-            "https://www.thegeezer.com/",
-            "https://www.georgesatthecove.com/",
-            "https://www.bigbearmountainresort.com/things-to-do/dining",
-            "https://gloriascocinamx.com/",
-            "https://www.goathilltavern.com/",
-            "http://goldcountrylanes.com/",
-            "http://www.goldenacorncasino.com/",
-            "http://goosetown-lounge.edan.io/",
-            "https://grandolebbq.com/",
-        ]
+        # Scrapy spider arguments — pass with: scrapy crawl venue_scraper -a limit=50 -a from_date=2026-01-01
+        self.api_limit = int(limit) if limit else None
+        self.from_date = from_date
+        self.api_page_size = self.api_limit or 100
+
+        # Lovable API — the venue directory this spider crawls.
+        self.lovable_api_url = self._require_env("LOVABLE_API_URL")
+        self.lovable_api_key = self._require_env("LOVABLE_SCRAPER_API_KEY")
+
+        # Supabase — live-music event listings (public_events_v1 table).
+        self.supabase_base_url = self._require_env("SUPABASE_BASE_URL")
+        self.supabase_key = self._require_env("SUPABASE_KEY")
+
+    def _require_env(self, name):
+        value = os.environ.get(name)
+        if not value:
+            raise RuntimeError(
+                f"Missing required environment variable: {name}. "
+                f"Add it to .env before running this spider — see README."
+            )
+        return value
 
     async def start(self):
         # Entry point — Scrapy calls this to generate the first request(s).
-        # `yield` sends the request into Scrapy's queue; Scrapy calls
-        # parse_page() when each page loads.
-        for url in self.start_urls:
-            yield self.make_playwright_request(
-                url=url,
-                depth=0,          # depth=0 means this is a seed/starting page
-                source_url=None,  # No referrer for seed pages
-                discovery_reason=["seed"],
+        # Two independent API calls: the Lovable venue directory (what we
+        # actually crawl) and the Supabase live-music events feed (currently
+        # just logged — see parse_public_events).
+        yield scrapy.Request(
+            url=self.build_lovable_url(),
+            headers={
+                "Authorization": f"Bearer {self.lovable_api_key}",
+                "Accept": "application/json",
+            },
+            callback=self.parse_lovable_venues,
+            errback=self.errback_lovable_api,
+            meta={"playwright": False},
+            dont_filter=True,
+        )
+
+        yield scrapy.Request(
+            url=f"{self.supabase_base_url}/public_events_v1?select=title,city,starts_at",
+            headers={
+                "apikey": self.supabase_key,
+                "Authorization": f"Bearer {self.supabase_key}",
+                "Accept": "application/json",
+            },
+            callback=self.parse_public_events,
+            errback=self.errback_lovable_api,
+            meta={"playwright": False},
+            dont_filter=True,
+        )
+
+    def build_lovable_url(self):
+        params = {}
+
+        if self.api_limit is not None:
+            params["limit"] = self.api_limit
+
+        if self.from_date:
+            params["from_date"] = self.from_date
+
+        if params:
+            return f"{self.lovable_api_url}?{urlencode(params)}"
+
+        return self.lovable_api_url
+
+    def parse_public_events(self, response):
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError:
+            self.logger.error(
+                "Supabase returned invalid JSON. status=%s body=%s",
+                response.status,
+                response.text[:500],
+            )
+            return
+
+        self.logger.info("Received %d public event(s)", len(data))
+
+        for event in data:
+            self.logger.info(
+                "Title=%s | City=%s | Starts At=%s",
+                event.get("title"),
+                event.get("city"),
+                event.get("starts_at"),
             )
 
-    def make_playwright_request(self, url, depth, source_url, discovery_reason):
+    def parse_lovable_venues(self, response):
+        """
+        Parse one page returned by the Lovable API.
+
+        Response shape (confirmed against the live API):
+        {
+          "scrape": {"started_at": ..., "completed_at": ..., "status": ...,
+                     "new_venues_added": ..., "total_found": ..., ...},
+          "venues": [{"id": <int, internal cursor key>,
+                      "venue_id": <Google Place ID — what the rest of our
+                                   pipeline/MySQL schema calls venue_id>,
+                      "venue_name": ..., "website": ..., ...}, ...],
+          "count": <int>,
+          "next_cursor": <int, last venue's internal "id">,
+          "has_more": <bool>,
+        }
+
+        Each venue website becomes a normal Playwright crawl request.
+        """
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError:
+            self.logger.error(
+                "Lovable returned invalid JSON. status=%s body=%s",
+                response.status,
+                response.text[:500],
+            )
+            return
+
+        scrape = data.get("scrape") or {}
+        if scrape:
+            self.logger.info(
+                "Scrape run: status=%s started=%s completed=%s new_venues=%s total_found=%s",
+                scrape.get("status"),
+                scrape.get("started_at"),
+                scrape.get("completed_at"),
+                scrape.get("new_venues_added"),
+                scrape.get("total_found"),
+            )
+
+        venues = data.get("venues", [])
+
+        self.logger.info("Received %d venue(s) from Lovable (count=%s).", len(venues), data.get("count"))
+
+        for venue in venues:
+            venue_id = venue.get("venue_id")
+            venue_name = venue.get("venue_name")
+            website = venue.get("website")
+
+            if not website:
+                continue
+
+            self.logger.info(
+                "Queueing venue: venue_id=%s name=%s website=%s",
+                venue_id,
+                venue_name,
+                website,
+            )
+
+            yield self.make_playwright_request(
+                url=website,
+                depth=0,
+                source_url=None,
+                discovery_reason=["lovable_database"],
+                venue_id=venue_id,
+                venue_name=venue_name,
+            )
+
+        # Fetch the next Lovable API page if one exists.
+        if data.get("has_more"):
+            next_cursor = data.get("next_cursor")
+
+            if next_cursor:
+                next_url = (
+                    f"{self.lovable_api_url}"
+                    f"?limit={self.api_page_size}"
+                    f"&cursor={next_cursor}"
+                )
+
+                yield scrapy.Request(
+                    url=next_url,
+                    headers={
+                        "Authorization": f"Bearer {self.lovable_api_key}",
+                        "Accept": "application/json",
+                    },
+                    callback=self.parse_lovable_venues,
+                    errback=self.errback_lovable_api,
+                    meta={"playwright": False},
+                    dont_filter=True,
+                )
+
+    def make_playwright_request(self, url, depth, source_url, discovery_reason, venue_id=None, venue_name=None):
         # Builds a Scrapy Request object wired to open in a Playwright browser.
         # The `meta` dict is how Scrapy passes extra data alongside the request.
         return scrapy.Request(
@@ -182,6 +340,8 @@ class VenueScraperSpider(scrapy.Spider):
                     "crawl_depth": depth,         # Track how deep we are in the crawl
                     "source_url": source_url,     # Which page linked to this one
                     "discovery_reason": discovery_reason,  # Why we're visiting (e.g. "seed", "link")
+                    "venue_id": venue_id,          # From the Lovable venue directory
+                    "venue_name": venue_name,      # From the Lovable venue directory
                 },
         )
 
@@ -195,26 +355,7 @@ class VenueScraperSpider(scrapy.Spider):
             self.logger.error("No Playwright page attached. url=%s", response.url)
             return
 
-        # For Debugging: collect any API calls the page makes in the background.
-        # Useful for finding if the site fetches offer data from a separate API endpoint.
-        api_responses = []
-
-        # Register a listener that fires every time the browser receives a response.
-        # We only care about /api/ URLs — those are backend data calls.
-        def capture_response(playwright_response):
-            url = playwright_response.url
-
-            if "/api/" in url:
-                api_responses.append(
-                    {
-                        "url": url,
-                        "status": playwright_response.status,
-                    }
-                )
-
-        page.on("response", capture_response)
-
-        depth = response.meta.get("crawl_depth",0)
+        depth = response.meta.get("crawl_depth", 0)
 
         try:
             self.logger.info("Opened page: %s", response.url)
@@ -250,7 +391,8 @@ class VenueScraperSpider(scrapy.Spider):
             for candidate in candidates:
                 yield {
                     "record_type": "offer_candidate",
-                    # "venue": self.identify_venue(final_url),
+                    "venue_id": response.meta.get("venue_id"),
+                    "venue_name": response.meta.get("venue_name"),
                     "page_url": final_url,
                     "requested_url": response.url,
                     "source_url": response.meta.get("source_url"),
@@ -389,7 +531,7 @@ class VenueScraperSpider(scrapy.Spider):
                         """
                         heading => {
                             // Normalize whitespace: collapse multiple spaces/newlines,
-                            // replace non-breaking spaces ( ) with regular spaces
+                            // replace non-breaking spaces ( ) with regular spaces
                             const normalize = value =>
                                 (value || "")
                                     .replace(/\\u00a0/g, " ")
@@ -656,3 +798,9 @@ class VenueScraperSpider(scrapy.Spider):
         page = failure.request.meta.get("playwright_page")
         if page is not None and not page.is_closed():
             await page.close()
+
+    def errback_lovable_api(self, failure):
+        self.logger.error(
+            "API request failed: %s",
+            failure,
+        )

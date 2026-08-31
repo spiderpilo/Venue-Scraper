@@ -32,6 +32,7 @@ python -m venv .scrapy_env
 pip install Scrapy
 pip install scrapy-playwright
 pip install playwright
+pip install python-dotenv
 
 playwright install chromium
 
@@ -39,6 +40,32 @@ playwright install chromium
 scrapy_list # or
 scrapy
 ```
+
+### Environment variables
+---
+Venue discovery comes from two external APIs — the spider won't start
+without these. Add them to the repo-root `.env` (the same file the main
+pipeline uses; `load_dotenv()` walks up from wherever `scrapy crawl` is run
+and finds it automatically):
+
+```
+# Lovable API — the venue directory this spider crawls
+LOVABLE_API_URL=
+LOVABLE_SCRAPER_API_KEY=
+
+# Supabase — live-music event listings (public_events_v1 table)
+SUPABASE_BASE_URL=
+SUPABASE_KEY=
+```
+
+Missing any of these raises a clear error naming which one, rather than
+crashing partway through a crawl.
+
+Optional spider arguments (for incremental/limited Lovable API pulls):
+```bash
+scrapy crawl venue_scraper -a limit=50 -a from_date=2026-01-01
+```
+
 ### 
 ```bash
 # Switch to Main Development Branch (the ones labelled with 'scrapy')
