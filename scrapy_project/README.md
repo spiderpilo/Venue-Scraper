@@ -1,5 +1,11 @@
 # SCRAPY PROJECT
 
+> **Status:** not part of the active pipeline right now. The main pipeline
+> (`run_model_pipeline.py`, see the repo-root README) covers venue
+> scraping — this Scrapy-based spider is a separate exploration, not
+> currently required to work. If you're just trying to run the pipeline or
+> get data into MySQL, you don't need anything in this directory.
+
 The scraper uses the Python frameworks **Scrapy** & Scrapy-Playwright to crawl venue websites, interact with JavaScript-rendered pages, and extract candidate text related to venues, happy hours, discounts, brunch specials, promotions, and other incentives. 
 
 ## 1. Project Goals

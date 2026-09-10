@@ -35,12 +35,19 @@ DB_CONFIG = {
     "cursorclass": pymysql.cursors.Cursor,
 }
 
-# DigitalOcean (and most managed MySQL providers) require SSL. Set
-# DB_SSL_CA to the downloaded CA certificate path to enable it; the local
-# docker-compose MySQL doesn't need this, so it's opt-in.
+# DigitalOcean (and most managed MySQL providers) require SSL; the local
+# docker-compose MySQL doesn't, so this is opt-in. Two ways to enable it:
+#   DB_SSL_CA=/path/to/ca-certificate.crt  — verified against DO's downloaded
+#       CA cert (stricter; matches sslmode=VERIFY-CA)
+#   DB_SSL_REQUIRED=true — just require an encrypted connection, no cert
+#       pinning (matches DO's own default sslmode=REQUIRED; verified working
+#       against a live DO cluster, no CA file needed)
 _ssl_ca = os.environ.get("DB_SSL_CA")
+_ssl_required = os.environ.get("DB_SSL_REQUIRED", "").strip().lower() in ("1", "true", "yes")
 if _ssl_ca:
     DB_CONFIG["ssl"] = {"ca": _ssl_ca}
+elif _ssl_required:
+    DB_CONFIG["ssl"] = {"ssl": {}}
 
 _UPSERT_VENUE_SQL = """
 INSERT INTO venues (
