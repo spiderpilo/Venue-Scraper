@@ -5,7 +5,8 @@ Rewrites incentive teasers that exceed a word limit using a local LLM (Ollama).
 import os
 import requests
 
-OLLAMA_MODEL = "llama3.2:3b"
+# Override with OLLAMA_TEASER_MODEL in .env — see README "Trying a different model".
+OLLAMA_MODEL = os.environ.get("OLLAMA_TEASER_MODEL", "llama3.2:3b")
 MAX_WORDS = 7
 
 _OLLAMA_URLS = [

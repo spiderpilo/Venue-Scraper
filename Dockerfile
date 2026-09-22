@@ -22,6 +22,7 @@ COPY scrape_inspect.py .
 COPY test_html_extract.py .
 COPY inspect_pipeline.py .
 COPY load_to_mysql.py .
+COPY load_to_staging.py .
 
 VOLUME ["/app/data"]
 

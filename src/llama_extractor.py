@@ -12,7 +12,11 @@ import requests
 
 from src.model_extractor import _has_incentive_keywords
 
-OLLAMA_MODEL = "llama3.1:8b"
+# Override with OLLAMA_EXTRACTOR_MODEL in .env to test a different model
+# without editing code (e.g. a smaller model for weaker hardware) — must be
+# pulled in Ollama first: ollama pull <model>. See README "Trying a
+# different model".
+OLLAMA_MODEL = os.environ.get("OLLAMA_EXTRACTOR_MODEL", "llama3.1:8b")
 
 _OLLAMA_URLS = [
     os.environ.get("OLLAMA_URL", ""),

@@ -108,6 +108,25 @@ docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v 
 
 ---
 
+## Trying a different model
+
+The two models (`llama3.1:8b` for classification, `llama3.2:3b` for teaser rewriting) aren't hardcoded — override them in `.env` to test something else, e.g. if your machine can't comfortably run an 8B model:
+
+```
+OLLAMA_EXTRACTOR_MODEL=llama3.2:3b
+OLLAMA_TEASER_MODEL=llama3.2:3b
+```
+
+Pull whatever you set first (`ollama pull <model>`) — the pipeline's pre-flight check will tell you exactly which one is missing if you forget:
+
+```bash
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file .env -v ${PWD}/data:/app/data venue-scraper python run_model_pipeline.py --from-lovable --limit 10
+```
+
+Worth knowing before trusting a smaller model's results: we've only tuned prompts and the membership/loyalty filter against `llama3.1:8b`'s specific output patterns. A smaller model needs less VRAM (`llama3.2:3b` needs roughly 2-3GB vs. ~6GB for the 8B model) but hasn't been validated on the actual classification task — run the same venues through both and compare (`--indices 0,5,12` with each model, on the same source) before switching for real, not just for weaker hardware's sake.
+
+---
+
 ## Loading into MySQL
 
 The app pulls venue/incentive data from MySQL, not directly from the pipeline's JSON output. `db/schema.sql` defines two tables:
