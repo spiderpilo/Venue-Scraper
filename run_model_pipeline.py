@@ -30,6 +30,7 @@ from src.field_enricher import enrich_fields
 from src.schedule_formatter import build_incentives
 from src.teaser_rewriter import rewrite_teaser, OLLAMA_MODEL as TEASER_MODEL
 from src.lovable_client import fetch_lovable_venues
+from src.localmusic_client import fetch_music_venues # local music venues (NEW)
 
 OUTPUT_DIR  = "data/model_output"
 OUTPUT_FILE = "model_venues.json"
@@ -75,6 +76,7 @@ def load_all_venues(path=DEFAULT_SOURCE):
 
 
 def venue_to_place(venue: dict) -> dict:
+
     return {
         "place_id": venue.get("venue_id"),
         "name": venue.get("venue_name"),
@@ -245,7 +247,7 @@ def _process_one(venue, text, scrape_source, scrape_time, idx, n_total):
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, workers=5,
-        from_lovable=False, lovable_from_date=None):
+        from_lovable=False, from_localmusic=False, lovable_from_date=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     missing = missing_ollama_models([EXTRACTOR_MODEL, TEASER_MODEL])
@@ -280,6 +282,19 @@ def run(indices=None, offset=0, limit=None, source=DEFAULT_SOURCE, output=None, 
         except Exception as exc:
             print(f"\nERROR: Lovable API request failed: {exc}\n")
             return []
+        
+    elif from_localmusic: # local music API 
+        max_venues = (offset + limit) if (indices is None and limit is not None) else None
+        print("\nFetching venues from the local music API...")
+        try:
+            all_venues = fetch_music_venues(max_venues=max_venues)
+        except RuntimeError as exc:
+            print(f"\nERROR: {exc}\n")
+            return []
+        except Exception as exc:
+            print(f"\nERROR: Local music API request failed: {exc}\n")
+            return []
+
     else:
         if not os.path.exists(source):
             print(f"\nERROR: Source file not found: {source}")
@@ -363,6 +378,10 @@ if __name__ == "__main__":
     parser.add_argument("--from-lovable", action="store_true",
                         help="Fetch venues from the Lovable API instead of --source. "
                              "Requires LOVABLE_API_URL and LOVABLE_SCRAPER_API_KEY in .env")
+    parser.add_argument("--from-local-music", action="store_true",
+                        help="Fetch venues from local music API. "
+                             "Requires LOCALMUSIC_SCRAPER_API_KEY, LOCALMUSIC_API_URL, and LOCALMUSIC_AUTH "
+                             "in .env"  ) # new
     parser.add_argument("--lovable-from-date", type=str, default=None,
                         help="With --from-lovable, only fetch venues updated since this date (YYYY-MM-DD)")
     args = parser.parse_args()
@@ -376,5 +395,5 @@ if __name__ == "__main__":
         out = f"model_venues_{datetime.now().strftime('%Y-%m-%d')}_off{args.offset:04d}.json"
 
     run(indices=idx, offset=args.offset, limit=args.limit, source=args.source,
-        output=out, workers=args.workers, from_lovable=args.from_lovable,
+        output=out, workers=args.workers, from_lovable=args.from_lovable, from_localmusic=args.from_local_music,
         lovable_from_date=args.lovable_from_date)

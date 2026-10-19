@@ -24,6 +24,9 @@ COPY inspect_pipeline.py .
 COPY load_to_mysql.py .
 COPY load_to_staging.py .
 
+COPY localmusic_run_model_pipeline.py .
+COPY load_to_staging_localmusic.py .
+
 VOLUME ["/app/data"]
 
 CMD ["python", "run_model_pipeline.py", "--help"]
